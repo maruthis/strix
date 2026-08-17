@@ -6,6 +6,7 @@ from . import (
     domains,
     issues,
     knowledge,
+    llm_settings,
     members,
     orgs,
     pentests,
@@ -32,4 +33,5 @@ ALL_ROUTERS = [
     webhooks.router,
     billing.router,
     audit.router,
+    llm_settings.router,
 ]

@@ -13,6 +13,7 @@ describe("api.get", () => {
     expect(result).toEqual({ hello: "world" });
 
     const [, init] = fetchMock.mock.calls[0];
+    if (!init) throw new Error("expected init");
     expect(init.method).toBe("GET");
     expect(init.credentials).toBe("include");
     expect(init.headers).toBeUndefined();
@@ -26,6 +27,7 @@ describe("api.post / patch", () => {
     await api.post("/api/thing", { name: "x" });
 
     const [, init] = fetchMock.mock.calls[0];
+    if (!init) throw new Error("expected init");
     expect(init.method).toBe("POST");
     expect(init.headers).toEqual({ "content-type": "application/json" });
     expect(init.body).toBe(JSON.stringify({ name: "x" }));
@@ -35,6 +37,7 @@ describe("api.post / patch", () => {
     const fetchMock = mockFetchJson({ body: { ok: true } });
     await api.post("/api/thing");
     const [, init] = fetchMock.mock.calls[0];
+    if (!init) throw new Error("expected init");
     expect(init.body).toBe("{}");
   });
 
@@ -42,6 +45,7 @@ describe("api.post / patch", () => {
     const fetchMock = mockFetchJson({ body: { ok: true } });
     await api.patch("/api/thing", { a: 1 });
     const [, init] = fetchMock.mock.calls[0];
+    if (!init) throw new Error("expected init");
     expect(init.method).toBe("PATCH");
   });
 });
@@ -51,6 +55,7 @@ describe("api.delete", () => {
     const fetchMock = mockFetchJson({ body: { ok: true } });
     await api.delete("/api/thing/1");
     const [, init] = fetchMock.mock.calls[0];
+    if (!init) throw new Error("expected init");
     expect(init.method).toBe("DELETE");
     expect(init.body).toBeUndefined();
   });

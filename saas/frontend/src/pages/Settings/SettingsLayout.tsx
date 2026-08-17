@@ -3,6 +3,7 @@ import { cn } from "../../lib/cn";
 
 const TABS = [
   { to: "/settings", label: "General", end: true },
+  { to: "/settings/llm-provider", label: "LLM Provider" },
   { to: "/settings/api-access", label: "API Access" },
   { to: "/settings/audit-logs", label: "Audit Logs" },
   { to: "/settings/members", label: "Members" },

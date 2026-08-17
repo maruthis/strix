@@ -179,7 +179,16 @@ export interface ApiToken {
   token_prefix: string;
   status: string;
   last_used_at: string | null;
+  expires_at: string | null;
   created_at: string;
+}
+
+export interface LlmSettings {
+  model: string;
+  api_base: string | null;
+  api_key_set: boolean;
+  api_key_last4: string | null;
+  updated_at: string;
 }
 
 export interface Webhook {

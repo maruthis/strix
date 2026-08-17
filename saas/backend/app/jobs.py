@@ -14,13 +14,18 @@ Two scan backends:
   call — see saas/README.md's isolation rule: we never fork engine code).
   Falls back to the mock scanner with a logged warning if the real engine
   raises (e.g. Docker/LLM credentials missing), so the job queue never gets
-  stuck.
+  stuck. Uses the target org's `OrgLlmSettings` (model/key/base) if
+  configured, applied via process env vars right before the call — see
+  `_run_real_scan`'s docstring for why that's only safe as long as this
+  module's worker loop stays single-scan-at-a-time (it is: `_worker_loop`
+  below awaits each job before dequeuing the next).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import uuid
 from . import models
@@ -81,8 +86,10 @@ async def _run_pentest(pentest_id: str) -> None:
         pentest.started_at = utcnow()
         db.commit()
 
+        llm_settings = db.get(models.OrgLlmSettings, pentest.org_id)
+
         try:
-            findings = await _scan(pentest)
+            findings = await _scan(pentest, llm_settings)
         except Exception:  # noqa: BLE001 - a scan bug must not strand the pentest in "running" forever
             logger.exception("scan failed for pentest %s", pentest.id)
             pentest.status = "failed"
@@ -131,31 +138,74 @@ async def _run_pentest(pentest_id: str) -> None:
         db.close()
 
 
-async def _scan(pentest: models.Pentest) -> list[dict]:
+async def _scan(pentest: models.Pentest, llm_settings: models.OrgLlmSettings | None) -> list[dict]:
     if settings.enable_real_scan:
         try:
-            return await _run_real_scan(pentest)
+            return await _run_real_scan(pentest, llm_settings)
         except Exception:  # noqa: BLE001
             logger.exception("real scan failed for pentest %s, falling back to mock scanner", pentest.id)
     return await _run_mock_scan(pentest)
 
 
-async def _run_real_scan(pentest: models.Pentest) -> list[dict]:
-    """Invoke the upstream strix engine as a library. Requires Docker + LLM credentials."""
+_LLM_ENV_KEYS = ("STRIX_LLM", "LLM_API_KEY", "LLM_API_BASE")
+
+
+async def _run_real_scan(pentest: models.Pentest, llm_settings: models.OrgLlmSettings | None) -> list[dict]:
+    """Invoke the upstream strix engine as a library. Requires Docker + LLM credentials.
+
+    If `llm_settings` has a model configured, this org's model/key/base
+    override the process defaults for the duration of the call, via env
+    vars (the only override surface strix's engine exposes — see
+    strix/config/loader.py's `load_settings()` memoization and
+    strix/config/models.py's `configure_sdk_model_defaults()`; there is no
+    per-call api_key/api_base parameter anywhere in `run_strix_scan`,
+    `build_strix_agent`, or `RunConfig`). The previous env is restored
+    afterward and strix's settings cache is invalidated both times so the
+    next scan (this org's or another's) re-reads fresh values.
+
+    This is safe ONLY because jobs.py's worker processes one scan at a
+    time (`_worker_loop` awaits each job before dequeuing the next) — two
+    concurrent `run_strix_scan()` calls in this process would race on this
+    same global state. Don't parallelize the worker without also isolating
+    each scan (e.g. one subprocess per scan) if per-org credentials matter.
+    """
+    from strix.config import loader as strix_config_loader
     from strix.core.runner import run_strix_scan  # lazy import: optional dependency
 
-    scan_config = {
-        "scan_id": pentest.id,
-        "targets": [pentest.target_label],
-        "run_name": f"saas-{pentest.id}",
-        "scan_mode": pentest.scan_mode,
-    }
-    await run_strix_scan(scan_config=scan_config, scan_id=pentest.id)
-    # Real findings land in the run's ReportState/vulnerabilities.json; a
-    # follow-up task should translate those into the shape `_run_pentest`
-    # expects here (see TASKS.md P6-5) once Docker/LLM creds are available
-    # to actually exercise this path end-to-end.
-    return []
+    override_active = bool(llm_settings and llm_settings.model)
+    previous_env = {k: os.environ.get(k) for k in _LLM_ENV_KEYS} if override_active else None
+
+    if override_active:
+        os.environ["STRIX_LLM"] = llm_settings.model
+        if llm_settings.api_key:
+            os.environ["LLM_API_KEY"] = llm_settings.api_key
+        if llm_settings.api_base:
+            os.environ["LLM_API_BASE"] = llm_settings.api_base
+        elif "LLM_API_BASE" in os.environ:
+            del os.environ["LLM_API_BASE"]
+        strix_config_loader._cached = None
+
+    try:
+        scan_config = {
+            "scan_id": pentest.id,
+            "targets": [pentest.target_label],
+            "run_name": f"saas-{pentest.id}",
+            "scan_mode": pentest.scan_mode,
+        }
+        await run_strix_scan(scan_config=scan_config, scan_id=pentest.id)
+        # Real findings land in the run's ReportState/vulnerabilities.json;
+        # a follow-up task should translate those into the shape
+        # `_run_pentest` expects here (see TASKS.md P6-5) once Docker/LLM
+        # creds are available to actually exercise this path end-to-end.
+        return []
+    finally:
+        if override_active and previous_env is not None:
+            for key, value in previous_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            strix_config_loader._cached = None
 
 
 MOCK_FINDINGS = [

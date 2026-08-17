@@ -35,3 +35,38 @@ mock provider until configured:
 Everything else (orgs, repos, domains, pentests, issues, PR review
 settings, knowledge base, chat, tokens, audit log) is real — backed by the
 actual database, no mocking involved.
+
+## Per-org LLM configuration
+
+Each org can set its own model/API base/API key from **Settings → LLM
+Provider** in the UI (`GET`/`PATCH /api/settings/llm`, backed by the
+`OrgLlmSettings` table) instead of relying on process-wide env vars. When
+`SAAS_ENABLE_REAL_SCAN=1`, `app/jobs.py`'s `_run_real_scan` applies that
+org's `model`/`api_key`/`api_base` as `STRIX_LLM`/`LLM_API_KEY`/
+`LLM_API_BASE` immediately before calling into the strix engine, and
+restores the previous env afterward. If an org hasn't configured anything,
+the scan falls back to whatever process-wide `STRIX_LLM`/`LLM_API_KEY`/
+`LLM_API_BASE` are set (see the root README/`docs/llm-providers/` for those).
+
+**Why this is safe only under today's architecture, and what would break
+it:** strix's LLM configuration is a process-global singleton
+(`strix/config/loader.py`'s `load_settings()` memoizes once per process)
+with no per-call override parameter anywhere in `run_strix_scan`,
+`build_strix_agent`, or `RunConfig` — `configure_sdk_model_defaults()`
+mutates `os.environ`, litellm's module globals, and the OpenAI-Agents SDK's
+global defaults directly. Swapping env vars per-org is only safe because
+`app/jobs.py`'s worker processes **one scan at a time** (a single
+`asyncio.Queue` consumed by one loop — see its module docstring). If the
+worker is ever parallelized to run multiple scans concurrently, this
+approach breaks: two orgs' credentials would race. Don't do that without
+also isolating each scan (e.g. one subprocess/container per scan) so each
+gets its own process-global state.
+
+**Two things flagged for hardening, not yet done:**
+- `OrgLlmSettings.api_key` is stored in plaintext in the database. Encrypt
+  at rest (KMS-backed field, `cryptography`'s Fernet, etc.) before any
+  shared or production deployment.
+- `ApiToken.expires_at` is stored and shown in the UI but **not enforced**
+  — there's no bearer-token authentication path in this scaffold at all
+  yet (only the session cookie is checked; see `app/deps.py`). Wire actual
+  token-based auth before relying on expiration for anything.

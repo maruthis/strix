@@ -17,6 +17,7 @@ import KnowledgeList from "./pages/Knowledge/KnowledgeList";
 import Chat from "./pages/Chat/Chat";
 import { SettingsLayout } from "./pages/Settings/SettingsLayout";
 import GeneralSettings from "./pages/Settings/GeneralSettings";
+import LlmProviderSettings from "./pages/Settings/LlmProviderSettings";
 import MembersSettings from "./pages/Settings/MembersSettings";
 import ApiAccessSettings from "./pages/Settings/ApiAccessSettings";
 import BillingSettings from "./pages/Settings/BillingSettings";
@@ -51,6 +52,7 @@ export default function App() {
 
         <Route path="/settings" element={<SettingsLayout />}>
           <Route index element={<GeneralSettings />} />
+          <Route path="llm-provider" element={<LlmProviderSettings />} />
           <Route path="members" element={<MembersSettings />} />
           <Route path="api-access" element={<ApiAccessSettings />} />
           <Route path="billing" element={<BillingSettings />} />

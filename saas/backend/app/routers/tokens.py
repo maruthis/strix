@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..deps import current_org, current_user, db_dep
+from ..time_utils import utcnow
 from .orgs import _record_audit
 
 router = APIRouter(prefix="/api/settings/tokens", tags=["settings"])
@@ -23,6 +25,7 @@ def _serialize(t: models.ApiToken) -> dict:
         "token_prefix": t.token_prefix,
         "status": t.status,
         "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+        "expires_at": t.expires_at.isoformat() if t.expires_at else None,
         "created_at": t.created_at.isoformat(),
     }
 
@@ -37,6 +40,7 @@ class NewTokenIn(BaseModel):
     name: str
     token_type: str = "personal"
     scopes: list[str] = ["read"]
+    expires_in_days: int | None = 90  # None = no expiration
 
 
 @router.post("")
@@ -54,6 +58,7 @@ def create_token(
         scopes=body.scopes,
         token_hash=hashlib.sha256(raw_token.encode()).hexdigest(),
         token_prefix=raw_token[:12],
+        expires_at=utcnow() + timedelta(days=body.expires_in_days) if body.expires_in_days else None,
     )
     db.add(token)
     db.commit()

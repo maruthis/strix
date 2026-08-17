@@ -288,6 +288,7 @@ class ApiToken(TimestampMixin, Base):
     token_prefix: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="active")  # active | revoked
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Webhook(TimestampMixin, Base):
@@ -299,6 +300,33 @@ class Webhook(TimestampMixin, Base):
     events: Mapped[list] = mapped_column(JSON, default=list)
     secret: Mapped[str] = mapped_column(String, default=lambda: uuid.uuid4().hex)
     status: Mapped[str] = mapped_column(String, default="active")
+
+
+# --------------------------------------------------------------------------
+# LLM / model provider (per-org)
+# --------------------------------------------------------------------------
+
+
+class OrgLlmSettings(Base):
+    """Per-org override for which LLM backs that org's pentests/PR reviews.
+
+    Consumed by jobs.py immediately before invoking the upstream strix
+    engine — see the module docstring there for the concurrency caveat:
+    strix's LLM config is a process-global singleton, so this only stays
+    safe as long as scans run one at a time (see jobs.py's single-worker
+    queue), not in parallel across orgs in the same process.
+    """
+
+    __tablename__ = "org_llm_settings"
+
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), primary_key=True)
+    model: Mapped[str] = mapped_column(String, default="")  # e.g. "openai/gpt-5.4", litellm-style
+    api_base: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Stored in plaintext for this scaffold — flagged in CONFIG.md as a
+    # hardening item (encrypt at rest / use a secrets manager) before any
+    # shared or production deployment.
+    api_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 # --------------------------------------------------------------------------

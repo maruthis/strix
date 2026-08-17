@@ -11,7 +11,7 @@ interface MockResponse {
  * enumerate distinct responses. */
 export function mockFetchJson(responses: MockResponse | MockResponse[]) {
   const queue = Array.isArray(responses) ? [...responses] : [responses];
-  const fn = vi.fn(async () => {
+  const fn = vi.fn(async (_url: string, _init?: RequestInit) => {
     const next = queue.length > 1 ? queue.shift()! : queue[0];
     const status = next.status ?? 200;
     const ok = next.ok ?? (status >= 200 && status < 300);
