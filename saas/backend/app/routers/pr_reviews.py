@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -66,24 +67,19 @@ class NewPRReviewIn(BaseModel):
     author: str = "unknown"
 
 
-@router.post("")
-def trigger_pr_review(
-    body: NewPRReviewIn,
-    org: models.Organization = Depends(current_org),
-    db: Session = Depends(db_dep),
-) -> dict:
-    repo = db.get(models.Repository, body.repository_id)
-    if not repo or repo.org_id != org.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="repository_not_found")
-
+def _run_pr_review(db: Session, org: models.Organization, repo: models.Repository, pr_number: int, title: str, author: str) -> models.PRReview:
+    """Core PR-review execution, shared by the manual trigger endpoint and
+    the GitHub webhook handler below. Runs the mock scanner (same findings
+    pool as jobs.py) and applies blocking-severity settings to derive a
+    status, then reports a check-run back through the GitHub provider."""
     settings_row = _get_or_create_settings(db, org.id)
 
     review = models.PRReview(
         org_id=org.id,
         repository_id=repo.id,
-        pr_number=body.pr_number,
-        title=body.title,
-        author=body.author,
+        pr_number=pr_number,
+        title=title,
+        author=author,
     )
     db.add(review)
     db.flush()
@@ -117,11 +113,26 @@ def trigger_pr_review(
     else:
         review.status = "awaiting_merge"
     db.commit()
+    db.refresh(review)
 
     provider = get_github_provider()
     conclusion = "failure" if review.status == "needs_attention" else "success"
     provider.create_check_run(full_name=repo.full_name, pr_number=review.pr_number, conclusion=conclusion, summary=f"{review.findings_count} finding(s)")
 
+    return review
+
+
+@router.post("")
+def trigger_pr_review(
+    body: NewPRReviewIn,
+    org: models.Organization = Depends(current_org),
+    db: Session = Depends(db_dep),
+) -> dict:
+    repo = db.get(models.Repository, body.repository_id)
+    if not repo or repo.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="repository_not_found")
+
+    review = _run_pr_review(db, org, repo, body.pr_number, body.title, body.author)
     return _serialize(review, db)
 
 
@@ -194,14 +205,66 @@ webhook_router = APIRouter(prefix="/api/webhooks", tags=["pr-reviews"])
 
 
 @webhook_router.post("/github")
-async def github_webhook(request: Request) -> dict:
+async def github_webhook(request: Request, db: Session = Depends(db_dep)) -> dict:
     payload = await request.body()
     provider = get_github_provider()
     signature = request.headers.get("X-Hub-Signature-256")
     if not provider.verify_webhook_signature(payload=payload, signature_header=signature):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="invalid_signature")
-    # Real handling would parse `X-GitHub-Event` (pull_request / issue_comment),
-    # match "@strix" mentions per TASKS.md P4-5, and call trigger_pr_review's
-    # logic. Scaffold accepts and acknowledges so webhook delivery can be
-    # configured and tested end-to-end against this endpoint.
-    return {"ok": True}
+
+    event = request.headers.get("X-GitHub-Event", "")
+    try:
+        data = json.loads(payload or b"{}")
+    except json.JSONDecodeError:
+        return {"ok": True, "skipped": "invalid_json"}
+
+    full_name = (data.get("repository") or {}).get("full_name")
+    pr_number: int | None = None
+    title = ""
+    author = ""
+    base_branch: str | None = None
+
+    if event == "pull_request" and data.get("action") in ("opened", "reopened", "synchronize"):
+        pr = data.get("pull_request") or {}
+        pr_number = pr.get("number")
+        title = pr.get("title", "")
+        author = (pr.get("user") or {}).get("login", "unknown")
+        base_branch = (pr.get("base") or {}).get("ref")
+        is_push_update = data.get("action") == "synchronize"
+    elif event == "issue_comment" and data.get("action") == "created" and "pull_request" in (data.get("issue") or {}):
+        comment_body = (data.get("comment") or {}).get("body", "")
+        if "@strix" not in comment_body.lower():
+            return {"ok": True, "skipped": "no_strix_mention"}
+        issue = data.get("issue") or {}
+        pr_number = issue.get("number")
+        title = issue.get("title", "")
+        author = (issue.get("user") or {}).get("login", "unknown")
+        is_push_update = False
+    else:
+        return {"ok": True, "skipped": f"unhandled_event:{event}/{data.get('action')}"}
+
+    if not full_name or pr_number is None:
+        return {"ok": True, "skipped": "missing_repository_or_pr_number"}
+
+    repo = db.query(models.Repository).filter_by(full_name=full_name).first()
+    if not repo:
+        return {"ok": True, "skipped": "repository_not_registered"}
+    if not repo.auto_review_enabled and event == "pull_request":
+        return {"ok": True, "skipped": "auto_review_disabled"}
+
+    org = db.get(models.Organization, repo.org_id)
+    if not org:
+        return {"ok": True, "skipped": "org_not_found"}
+
+    settings_row = _get_or_create_settings(db, org.id)
+    if is_push_update and not settings_row.rereview_on_push:
+        return {"ok": True, "skipped": "rereview_on_push_disabled"}
+    if settings_row.target_branches and base_branch and base_branch not in settings_row.target_branches:
+        return {"ok": True, "skipped": "branch_not_targeted"}
+    if settings_row.exclude_bot_accounts and author.endswith("[bot]"):
+        return {"ok": True, "skipped": "excluded_bot_account"}
+    if author in settings_row.excluded_usernames:
+        return {"ok": True, "skipped": "excluded_username"}
+
+    review = _run_pr_review(db, org, repo, pr_number, title, author)
+    return {"ok": True, "review_id": review.id, "status": review.status}

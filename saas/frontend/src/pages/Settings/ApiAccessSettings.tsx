@@ -7,6 +7,7 @@ import { EmptyState } from "../../components/shared/EmptyState";
 import { Modal } from "../../components/shared/Modal";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { Button, Field, TextInput } from "../../components/shared/Form";
+import { toast } from "../../components/shared/Toast";
 import { cn } from "../../lib/cn";
 
 export default function ApiAccessSettings() {
@@ -43,7 +44,10 @@ function TokensPanel() {
 
   const revoke = useMutation({
     mutationFn: (id: string) => api.delete(`/api/settings/tokens/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["api-tokens"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["api-tokens"] });
+      toast.success("Token revoked");
+    },
   });
 
   return (
@@ -144,12 +148,16 @@ function WebhooksPanel() {
       queryClient.invalidateQueries({ queryKey: ["webhooks"] });
       setUrl("");
       setCreateOpen(false);
+      toast.success("Webhook created");
     },
   });
 
   const remove = useMutation({
     mutationFn: (id: string) => api.delete(`/api/settings/webhooks/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["webhooks"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["webhooks"] });
+      toast.success("Webhook deleted");
+    },
   });
 
   return (

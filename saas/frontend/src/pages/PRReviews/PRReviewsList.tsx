@@ -2,12 +2,15 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GitPullRequest, Settings as SettingsIcon, X } from "lucide-react";
 import { api } from "../../api/client";
-import type { PRReviewsResponse, PRReviewSettings, Repository, Severity } from "../../api/types";
+import type { PRReview, PRReviewsResponse, PRReviewSettings, PRReviewStatus, Repository, Severity } from "../../api/types";
 import { EmptyState } from "../../components/shared/EmptyState";
 import { Modal } from "../../components/shared/Modal";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { Tabs, FilterBar } from "../../components/shared/FilterBar";
 import { Button, Field, Select, TextInput, Toggle } from "../../components/shared/Form";
+import { ViewToggle, type ViewMode } from "../../components/shared/ViewToggle";
+import { Board } from "../../components/shared/Board";
+import { toast } from "../../components/shared/Toast";
 import { timeAgo } from "../../lib/format";
 
 const TABS = [
@@ -18,17 +21,28 @@ const TABS = [
   { key: "passed", label: "Passed" },
 ];
 
+const BOARD_COLUMNS: { key: PRReviewStatus; label: string }[] = [
+  { key: "awaiting_merge", label: "Awaiting Merge" },
+  { key: "needs_attention", label: "Needs Attention" },
+  { key: "merged_with_open_findings", label: "Merged with Open Findings" },
+  { key: "passed", label: "Passed" },
+];
+
 export default function PRReviewsList() {
   const [status, setStatus] = useState("all");
   const [search, setSearch] = useState("");
+  const [view, setView] = useState<ViewMode>("list");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
 
+  // Board mode always shows every status grouped into columns, so it ignores
+  // the status tab (which only applies to list mode).
+  const effectiveStatus = view === "board" ? "all" : status;
   const { data, isLoading } = useQuery({
-    queryKey: ["pr-reviews", status, search],
+    queryKey: ["pr-reviews", effectiveStatus, search],
     queryFn: () =>
       api.get<PRReviewsResponse>(
-        `/api/pr-reviews?${status !== "all" ? `status_filter=${status}&` : ""}${search ? `search=${encodeURIComponent(search)}` : ""}`
+        `/api/pr-reviews?${effectiveStatus !== "all" ? `status_filter=${effectiveStatus}&` : ""}${search ? `search=${encodeURIComponent(search)}` : ""}`
       ),
   });
 
@@ -48,33 +62,64 @@ export default function PRReviewsList() {
         Tip — Tag <code className="rounded bg-blue-500/10 px-1">@strix</code> on any pull request to run a security review.
       </div>
 
-      <Tabs tabs={TABS.map((t) => ({ ...t, count: data?.counts?.[t.key] ?? 0 }))} active={status} onChange={setStatus} />
-      <FilterBar search={search} onSearch={setSearch} placeholder="Search repository, title, or PR number" />
+      {view === "list" && <Tabs tabs={TABS.map((t) => ({ ...t, count: data?.counts?.[t.key] ?? 0 }))} active={status} onChange={setStatus} />}
+
+      <FilterBar search={search} onSearch={setSearch} placeholder="Search repository, title, or PR number">
+        <ViewToggle view={view} onChange={setView} />
+      </FilterBar>
 
       {!isLoading && data?.items.length === 0 && (
         <EmptyState icon={<GitPullRequest size={20} />} title="No PR reviews" description="Tag @strix on any pull request to run a security review." />
       )}
 
-      {data && data.items.length > 0 && (
+      {data && data.items.length > 0 && view === "list" && (
         <div className="space-y-2">
           {data.items.map((r) => (
-            <div key={r.id} className="flex items-center justify-between rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-4">
-              <div>
-                <div className="text-sm text-white">
-                  {r.repository_full_name} <span className="text-[#666]">#{r.pr_number}</span> — {r.title}
-                </div>
-                <div className="mt-1 text-xs text-[#666]">
-                  by {r.author} · {timeAgo(r.updated_at)} · {r.findings_count} finding(s)
-                </div>
-              </div>
-              <StatusPill value={r.status} />
-            </div>
+            <PRReviewRow key={r.id} review={r} />
           ))}
         </div>
       )}
 
+      {data && data.items.length > 0 && view === "board" && (
+        <Board
+          columns={BOARD_COLUMNS.map((col) => ({ ...col, items: data.items.filter((r) => r.status === col.key) }))}
+          renderCard={(r) => <PRReviewCard review={r} />}
+        />
+      )}
+
       <PRReviewSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <TriggerReviewModal open={reviewOpen} onClose={() => setReviewOpen(false)} />
+    </div>
+  );
+}
+
+function PRReviewRow({ review: r }: { review: PRReview }) {
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-4">
+      <div>
+        <div className="text-sm text-white">
+          {r.repository_full_name} <span className="text-[#666]">#{r.pr_number}</span> — {r.title}
+        </div>
+        <div className="mt-1 text-xs text-[#666]">
+          by {r.author} · {timeAgo(r.updated_at)} · {r.findings_count} finding(s)
+        </div>
+      </div>
+      <StatusPill value={r.status} />
+    </div>
+  );
+}
+
+function PRReviewCard({ review: r }: { review: PRReview }) {
+  return (
+    <div className="rounded-lg border border-[#222] bg-[rgba(255,255,255,0.02)] p-3">
+      <div className="mb-1 text-sm text-white">
+        {r.repository_full_name} <span className="text-[#666]">#{r.pr_number}</span>
+      </div>
+      <div className="mb-2 text-xs text-[#888]">{r.title}</div>
+      <div className="flex items-center justify-between text-[10px] text-[#666]">
+        <span>{r.author}</span>
+        <span>{r.findings_count} finding(s)</span>
+      </div>
     </div>
   );
 }
@@ -245,10 +290,11 @@ function TriggerReviewModal({ open, onClose }: { open: boolean; onClose: () => v
   const [title, setTitle] = useState("");
 
   const trigger = useMutation({
-    mutationFn: () => api.post("/api/pr-reviews", { repository_id: repositoryId, pr_number: Number(prNumber), title }),
-    onSuccess: () => {
+    mutationFn: () => api.post<PRReview>("/api/pr-reviews", { repository_id: repositoryId, pr_number: Number(prNumber), title }),
+    onSuccess: (review) => {
       queryClient.invalidateQueries({ queryKey: ["pr-reviews"] });
       onClose();
+      toast.success(`Review ${review.status === "passed" ? "passed" : `found ${review.findings_count} finding(s)`}`);
     },
   });
 

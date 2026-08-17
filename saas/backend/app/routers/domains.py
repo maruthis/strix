@@ -29,6 +29,14 @@ def list_domains(org: models.Organization = Depends(current_org), db: Session = 
     return [_serialize(d) for d in domains]
 
 
+@router.get("/{domain_id}")
+def get_domain(domain_id: str, org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> dict:
+    domain = db.get(models.Domain, domain_id)
+    if not domain or domain.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    return _serialize(domain)
+
+
 class AddDomainIn(BaseModel):
     hostname: str
     verification_method: str = "dns_txt"

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe, Plus, ShieldCheck } from "lucide-react";
 import { api } from "../../api/client";
@@ -8,6 +8,7 @@ import { EmptyState } from "../../components/shared/EmptyState";
 import { Modal } from "../../components/shared/Modal";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { Button, Field, TextInput } from "../../components/shared/Form";
+import { toast } from "../../components/shared/Toast";
 import { timeAgo } from "../../lib/format";
 
 export default function DomainsList() {
@@ -22,7 +23,10 @@ export default function DomainsList() {
 
   const verify = useMutation({
     mutationFn: (id: string) => api.post(`/api/domains/${id}/verify`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["domains"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["domains"] });
+      toast.success("Domain verified");
+    },
   });
 
   const scan = useMutation({
@@ -46,7 +50,11 @@ export default function DomainsList() {
       {domains && domains.length > 0 && (
         <div className="space-y-2">
           {domains.map((d) => (
-            <div key={d.id} className="flex items-center justify-between rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-4">
+            <Link
+              key={d.id}
+              to={`/domains/${d.id}`}
+              className="flex items-center justify-between rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-4 hover:border-[#333]"
+            >
               <div>
                 <div className="flex items-center gap-2 text-white">
                   <Globe size={15} className="text-[#888]" />
@@ -57,7 +65,7 @@ export default function DomainsList() {
                   {d.last_tested_at ? `Last tested ${timeAgo(d.last_tested_at)}` : "Never tested"}
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2" onClick={(e) => e.preventDefault()}>
                 {!d.verified && (
                   <Button variant="secondary" onClick={() => verify.mutate(d.id)} disabled={verify.isPending}>
                     <ShieldCheck size={14} /> Verify
@@ -69,7 +77,7 @@ export default function DomainsList() {
                   </Button>
                 )}
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       )}
@@ -85,10 +93,11 @@ function AddDomainModal({ open, onClose }: { open: boolean; onClose: () => void 
 
   const add = useMutation({
     mutationFn: () => api.post<DomainOut>("/api/domains", { hostname }),
-    onSuccess: () => {
+    onSuccess: (domain) => {
       queryClient.invalidateQueries({ queryKey: ["domains"] });
       setHostname("");
       onClose();
+      toast.success(`Added ${domain.hostname}`);
     },
   });
 

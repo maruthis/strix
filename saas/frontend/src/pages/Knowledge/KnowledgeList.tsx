@@ -7,6 +7,7 @@ import { EmptyState } from "../../components/shared/EmptyState";
 import { Modal } from "../../components/shared/Modal";
 import { FilterBar } from "../../components/shared/FilterBar";
 import { Button, Field, Select, TextArea } from "../../components/shared/Form";
+import { toast } from "../../components/shared/Toast";
 
 export default function KnowledgeList() {
   const queryClient = useQueryClient();
@@ -20,7 +21,10 @@ export default function KnowledgeList() {
 
   const remove = useMutation({
     mutationFn: (id: string) => api.delete(`/api/knowledge/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["knowledge"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["knowledge"] });
+      toast.success("Knowledge entry removed");
+    },
   });
 
   return (
@@ -87,6 +91,7 @@ function AddKnowledgeModal({ open, onClose }: { open: boolean; onClose: () => vo
       queryClient.invalidateQueries({ queryKey: ["knowledge"] });
       setDescription("");
       onClose();
+      toast.success("Knowledge added");
     },
   });
 

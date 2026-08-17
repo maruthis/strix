@@ -3,6 +3,7 @@ import { api } from "../../api/client";
 import type { Subscription } from "../../api/types";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { Button } from "../../components/shared/Form";
+import { toast } from "../../components/shared/Toast";
 
 export default function BillingSettings() {
   const queryClient = useQueryClient();
@@ -10,7 +11,10 @@ export default function BillingSettings() {
 
   const addCard = useMutation({
     mutationFn: () => api.post<Subscription>("/api/settings/billing/add-card"),
-    onSuccess: (updated) => queryClient.setQueryData(["billing"], updated),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["billing"], updated);
+      toast.success("Card added");
+    },
   });
 
   if (!sub) return null;

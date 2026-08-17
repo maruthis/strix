@@ -12,6 +12,7 @@ import IssueDetail from "./pages/Issues/IssueDetail";
 import PRReviewsList from "./pages/PRReviews/PRReviewsList";
 import RepositoriesList from "./pages/Repositories/RepositoriesList";
 import DomainsList from "./pages/Domains/DomainsList";
+import DomainDetail from "./pages/Domains/DomainDetail";
 import KnowledgeList from "./pages/Knowledge/KnowledgeList";
 import Chat from "./pages/Chat/Chat";
 import { SettingsLayout } from "./pages/Settings/SettingsLayout";
@@ -44,6 +45,7 @@ export default function App() {
         <Route path="/pr-reviews" element={<PRReviewsList />} />
         <Route path="/repositories" element={<RepositoriesList />} />
         <Route path="/domains" element={<DomainsList />} />
+        <Route path="/domains/:id" element={<DomainDetail />} />
         <Route path="/knowledge" element={<KnowledgeList />} />
         <Route path="/chat" element={<Chat />} />
 

@@ -46,6 +46,7 @@ def list_issues(
     status_filter: str | None = None,
     severity: str | None = None,
     repository_id: str | None = None,
+    domain_id: str | None = None,
     org: models.Organization = Depends(current_org),
     db: Session = Depends(db_dep),
 ) -> dict:
@@ -56,6 +57,8 @@ def list_issues(
         q = q.filter(models.Issue.severity == severity)
     if repository_id:
         q = q.filter(models.Issue.repository_id == repository_id)
+    if domain_id:
+        q = q.filter(models.Issue.domain_id == domain_id)
     issues = q.order_by(models.Issue.created_at.desc()).all()
 
     all_open = db.query(models.Issue).filter_by(org_id=org.id).filter(models.Issue.status != "fixed", models.Issue.status != "ignored").all()

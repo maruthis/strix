@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import type { Issue, IssueStatus } from "../../api/types";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { Select } from "../../components/shared/Form";
+import { toast } from "../../components/shared/Toast";
 import { formatDate } from "../../lib/format";
 
 const STATUS_OPTIONS: { value: IssueStatus; label: string }[] = [
@@ -40,6 +41,7 @@ export default function IssueDetail() {
     onSuccess: (updated) => {
       queryClient.setQueryData(["issue", id], updated);
       queryClient.invalidateQueries({ queryKey: ["issues"] });
+      toast.success(`Marked as ${updated.status.replace(/_/g, " ")}`);
     },
   });
 

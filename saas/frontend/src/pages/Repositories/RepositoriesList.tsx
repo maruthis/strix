@@ -8,6 +8,7 @@ import { EmptyState } from "../../components/shared/EmptyState";
 import { Modal } from "../../components/shared/Modal";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { Button, Toggle } from "../../components/shared/Form";
+import { toast } from "../../components/shared/Toast";
 import { timeAgo } from "../../lib/format";
 
 export default function RepositoriesList() {
@@ -103,9 +104,10 @@ function AddRepositoryModal({ open, onClose }: { open: boolean; onClose: () => v
 
   const add = useMutation({
     mutationFn: (repo: InstallableRepo) => api.post("/api/repositories", { full_name: repo.full_name, default_branch: repo.default_branch }),
-    onSuccess: () => {
+    onSuccess: (_data, repo) => {
       queryClient.invalidateQueries({ queryKey: ["repositories"] });
       queryClient.invalidateQueries({ queryKey: ["installable-repositories"] });
+      toast.success(`Added ${repo.full_name}`);
     },
   });
 

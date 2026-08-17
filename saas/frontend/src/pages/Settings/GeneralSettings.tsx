@@ -1,23 +1,33 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
 import { useSession } from "../../store/session";
 import { Button, Field, TextInput, Toggle } from "../../components/shared/Form";
+import { toast } from "../../components/shared/Toast";
 
 export default function GeneralSettings() {
   const { me, refresh, logout } = useSession();
+  const navigate = useNavigate();
   const [name, setName] = useState(me?.active_org?.name ?? "");
   const [confirmName, setConfirmName] = useState("");
   const isAdmin = me?.role === "admin";
 
   const rename = useMutation({
     mutationFn: () => api.patch("/api/orgs/current", { name }),
-    onSuccess: () => refresh(),
+    onSuccess: () => {
+      refresh();
+      toast.success("Organization renamed");
+    },
   });
 
   const deleteOrg = useMutation({
     mutationFn: () => api.delete("/api/orgs/current"),
-    onSuccess: () => refresh(),
+    onSuccess: async () => {
+      await refresh();
+      toast.success("Organization deleted");
+      navigate("/onboarding");
+    },
   });
 
   if (!me?.active_org) return null;

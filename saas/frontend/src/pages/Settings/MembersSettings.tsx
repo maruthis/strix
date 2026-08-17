@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import type { Invitation, MembershipOut } from "../../api/types";
 import { Modal } from "../../components/shared/Modal";
 import { Button, Field, Select, TextInput } from "../../components/shared/Form";
+import { toast } from "../../components/shared/Toast";
 
 export default function MembersSettings() {
   const queryClient = useQueryClient();
@@ -15,7 +16,10 @@ export default function MembersSettings() {
 
   const revoke = useMutation({
     mutationFn: (id: string) => api.post(`/api/members/invitations/${id}/revoke`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["invitations"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invitations"] });
+      toast.success("Invitation revoked");
+    },
   });
 
   return (
@@ -80,6 +84,7 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
       queryClient.invalidateQueries({ queryKey: ["invitations"] });
       setEmail("");
       onClose();
+      toast.success(`Invitation sent to ${email}`);
     },
   });
 

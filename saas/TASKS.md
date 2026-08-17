@@ -51,17 +51,17 @@ Conventions:
 ## Phase 4 — PR Reviews
 
 - [x] `P4-1` `pages/PRReviews/PRReviewsList.tsx` — status tabs with counts, matching the screenshot's 5 tabs
-- [x] `P4-2` Search + status filter wired; repo dropdown/date range filters not added to the UI yet (backend supports `repository_id`); **List/Board toggle not built — list view only**
+- [x] `P4-2` Search + status filter wired; repo dropdown/date range filters not added to the UI yet (backend supports `repository_id`); List/Board toggle now built (see `PX-2`)
 - [x] `P4-3` Empty state + "@strix" tip banner; "Connect Repository" links to `/repositories`, "Review a Pull Request" opens a manual-trigger modal
 - [x] `P4-4` PR Review Settings modal — every field from the screenshot: re-review on push, target branches (add/remove chip list), approve clean PRs, block on findings + severity chips, exclude bots + excluded usernames (add/remove chip list), allow overage reviews, review cap per developer
-- [ ] `P4-5` GitHub webhook receiver scaffolded (`POST /api/webhooks/github` in `app/routers/pr_reviews.py`, signature verification wired to the provider) but does not yet parse `X-GitHub-Event`/`@strix` mentions or call `trigger_pr_review` — noted inline in the handler
-- [ ] `P4-6` Board (kanban) view — not built, list view only
+- [x] `P4-5` GitHub webhook receiver (`POST /api/webhooks/github` in `app/routers/pr_reviews.py`) now parses `X-GitHub-Event` for `pull_request` (opened/reopened/synchronize) and `issue_comment` with an `@strix` mention, resolves the target org/repo by `full_name`, applies `rereview_on_push`/`target_branches`/`exclude_bot_accounts`/`excluded_usernames` from settings before running, and calls the same `_run_pr_review()` the manual trigger uses (refactored out of `trigger_pr_review` so both paths share one implementation). Tested via curl against all branches (unregistered repo, opened, synchronize with re-review-on-push off, comment without/with `@strix`, unrelated event)
+- [x] `P4-6` Board (kanban) view — `components/shared/Board.tsx` + `ViewToggle.tsx`, columns by status
 
 ## Phase 5 — Domains & APIs
 
 - [x] `P5-1` `pages/Domains/DomainsList.tsx` — list + empty state
 - [x] `P5-2` Add Domain modal + "Verify" button; `verify_domain` is currently a mock (marks verified immediately, see docstring) rather than a real DNS TXT/file check — swap in an actual resolver call when ready
-- [ ] `P5-3` Domain detail — backend has scan history via `/api/pentests?target_type=domain`; no dedicated detail page yet, just the list + "Run scan" action
+- [x] `P5-3` `pages/Domains/DomainDetail.tsx` — verification instructions (token + method), verify/scan actions, scan history (`GET /api/pentests?target_type=domain&target_id=`, added `target_id` filter), open findings (`GET /api/issues?domain_id=`, added that filter). Also added `GET /api/domains/{id}` backend endpoint this page needed
 - [x] `P5-4` Scans are gated on `domain.verified` — `POST /api/domains/{id}/scan` returns 400 `domain_not_verified` otherwise (tested); frontend only shows "Run scan" once verified
 
 ## Phase 6 — Pentests
@@ -74,7 +74,7 @@ Conventions:
 
 ## Phase 7 — Issues
 
-- [x] `P7-1` `pages/Issues/IssuesList.tsx` — severity summary strip, status tabs with counts, search; **List/Board toggle not built — list view only**
+- [x] `P7-1` `pages/Issues/IssuesList.tsx` — severity summary strip, status tabs with counts, search, List/Board toggle (board groups by status, ignores the tab filter)
 - [x] `P7-2` `pages/Issues/IssueDetail.tsx` — description/technical analysis/PoC/remediation, CVSS, status changer. Simpler than the viewer's `vulnerability/*` set (no code diff rendering, no markdown/syntax highlighting) — those components render fields (`code_before`/`code_after`, `poc_script_code`) the mock scanner doesn't populate yet; port `CodeDiffBlock`/`MdCodeBlock`/`PocBlock` in once real findings carry that data
 - [x] `P7-3` Issue state transitions — `PATCH /api/issues/{id}/status` (validated against `VALID_STATUSES`) + audit log entry; no reassignment field/flow yet (no "assignee" concept in the model)
 - [x] `P7-4` Cross-linking — `Issue` rows carry `pentest_id`/`pr_review_id`/`repository_id`/`domain_id` foreign keys
@@ -103,9 +103,9 @@ Conventions:
 
 ## Cross-cutting
 
-- [x] `PX-1` `components/shared/`: `EmptyState`, `Modal`, `Form.tsx` (`Button`/`TextInput`/`TextArea`/`Select`/`Toggle`/`Field`), `FilterBar.tsx` (`FilterBar`/`Tabs`), `StatusPill` — reused across every list/settings page; theme tokens in `index.css` adapted from the existing viewer's palette
-- [ ] `PX-2` Shared List/Board toggle component — **not built**; Issues and PR Reviews are list-view only (see `P4-6`/`P7-1`)
-- [ ] `PX-3` Toast/notification system — **not built**; mutations currently show no success/error toast, only inline states (disabled buttons, error text on the login form). Worth adding once there's real async failure surface to report (webhook delivery, real-scan errors)
+- [x] `PX-1` `components/shared/`: `EmptyState`, `Modal`, `Form.tsx` (`Button`/`TextInput`/`TextArea`/`Select`/`Toggle`/`Field`), `FilterBar.tsx` (`FilterBar`/`Tabs`), `StatusPill`, `ViewToggle`, `Board`, `Toast` — reused across every list/settings page; theme tokens in `index.css` adapted from the existing viewer's palette
+- [x] `PX-2` `components/shared/ViewToggle.tsx` + `Board.tsx` — used by Issues and PR Reviews (`P7-1`/`P4-6`); board mode always fetches/groups by the full status set regardless of the active list-mode tab filter
+- [x] `PX-3` `components/shared/Toast.tsx` — zustand-backed toast store + `<Toaster/>` mounted once in `main.tsx`. Errors are wired globally via `QueryClient`'s `MutationCache.onError` (every failed mutation across the app surfaces a toast automatically, no per-call wiring needed); success toasts added explicitly to the key confirmable actions (add repo/domain, verify domain, invite member, create/revoke token, create/delete webhook, add/remove knowledge, trigger PR review, change issue status, add card, rename/delete org, add/remove pentest schedule)
 - [ ] `PX-4` Plan-gating/upgrade components — locked nav items exist (`P2-5`) but there's no upgrade modal/CTA behind them yet, and no actual entitlement check gating any route
-- [ ] `PX-5` E2E tests for critical flows — **not built**. Verified manually end-to-end instead: backend flows via curl (OTP login → org → repo → pentest → issues → PR review → knowledge → chat → members → tokens → billing → domain-verification-gating, all passing), frontend build/typecheck clean (`tsc --noEmit`, `vite build`), and the full OTP login flow re-verified through the actual Vite dev proxy with cookies. No headless-browser tool was available in this environment to click through the rendered UI — that's the one verification step still owed before calling this production-ready.
+- [ ] `PX-5` E2E tests for critical flows — **not built**. Verified manually end-to-end instead: backend flows via curl (OTP login → org → repo → pentest → issues → PR review → knowledge → chat → members → tokens → billing → domain-verification-gating → domain detail filters → GitHub webhook event parsing, all passing), frontend build/typecheck clean (`tsc --noEmit`, `vite build`), and login re-verified through the actual Vite dev proxy with cookies, plus SPA routing checked for every new route (`/domains/:id` etc). No headless-browser tool was available in this environment to click through the rendered UI — that's the one verification step still owed before calling this production-ready.
 - [x] `PX-6` Open-source boundary: everything under `saas/` is fork-only SaaS control-plane code; `strix/` stays the untouched upstream engine, invoked as a library dependency (see `saas/README.md`, `app/jobs.py`'s `_run_real_scan`)
