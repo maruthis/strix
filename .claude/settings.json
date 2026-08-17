@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -b cookies.txt \"http://127.0.0.1:8000/api/issues?domain_id=19041e050de54dbbbffa1f370574dd9b\")",
+      "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(len\\(d['items']\\),'issues'\\)\")",
+      "Bash(awk 'NR==23||NR==30||NR==48||NR==58{print NR\": \"$0}' app/deps.py)",
+      "Bash(awk 'NR==44||NR==69||NR==79||\\(NR>=129&&NR<=132\\)||\\(NR>=138&&NR<=151\\){print NR\": \"$0}' app/jobs.py)",
+      "Bash(awk 'NR==35||NR==65{print NR\": \"$0}' app/providers/billing.py)",
+      "Bash(awk 'NR==56||NR==89||NR==90{print NR\": \"$0}' app/providers/github.py)",
+      "Bash(awk 'NR>=26&&NR<=29{print NR\": \"$0}' app/routers/billing.py)",
+      "Bash(npx vitest *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(grep -iE \"coverage|pytest_cache|\\\\.db$\")",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\('.github/workflows/saas-tests.yml'\\)\\)\")",
+      "Bash(grep -iE \"node_modules|\\\\.venv|coverage|\\\\.db$|pytest_cache|htmlcov\")",
+      "Bash(git commit -m ' *)",
+      "Bash(chmod +x /Users/maruti/Documents/TSGit/strix/saas/dev.sh)",
+      "Bash(nohup saas/dev.sh)",
+      "Bash(echo \"launcher pid: $!\")",
+      "Bash(pkill -f \"saas/dev.sh\")",
+      "Bash(rm -f saas/backend/strix_saas.db)",
+      "Bash(lsof -nP -iTCP:8000 -iTCP:5173 -sTCP:LISTEN)",
+      "Bash(cd /Users/maruti/Documents/TSGit/strix *)"
+    ],
+    "additionalDirectories": [
+      "/private/tmp"
+    ]
+  }
+}
