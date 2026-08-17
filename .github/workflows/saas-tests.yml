@@ -1,0 +1,54 @@
+name: SaaS Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'saas/**'
+      - '.github/workflows/saas-tests.yml'
+  pull_request:
+    paths:
+      - 'saas/**'
+      - '.github/workflows/saas-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: saas/backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: Run tests with coverage
+        run: uv run pytest --cov --cov-report=term-missing
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: saas/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: saas/frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit -p .
+      - name: Run tests with coverage
+        run: npm run test:coverage
+      - name: Build
+        run: npx vite build

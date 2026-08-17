@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:5173"
 
     enable_real_scan: bool = False
+    mock_scan_min_seconds: float = 4.0
+    mock_scan_max_seconds: float = 8.0
 
     github_app_id: str | None = None
     github_app_private_key: str | None = None

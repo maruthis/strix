@@ -30,25 +30,34 @@ from .time_utils import utcnow
 
 logger = logging.getLogger("saas.jobs")
 
-_queue: asyncio.Queue[str] = asyncio.Queue()
+# Created fresh in start_worker() rather than at module import time: this
+# module is a long-lived singleton (one import per process), but a queue
+# must be bound to the event loop of the lifespan that owns it. Rebuilding
+# it per-lifespan keeps repeated app startup/shutdown cycles in the same
+# process safe (e.g. multiple TestClient instances in a test session).
+_queue: asyncio.Queue[str] | None = None
 _worker_task: asyncio.Task | None = None
 
 
 async def enqueue_pentest(pentest_id: str) -> None:
+    if _queue is None:
+        raise RuntimeError("job queue not started — call jobs.start_worker() from the app lifespan first")
     await _queue.put(pentest_id)
 
 
 async def start_worker() -> None:
-    global _worker_task
+    global _queue, _worker_task
     if _worker_task is None:
+        _queue = asyncio.Queue()
         _worker_task = asyncio.create_task(_worker_loop())
 
 
 async def stop_worker() -> None:
-    global _worker_task
+    global _queue, _worker_task
     if _worker_task is not None:
         _worker_task.cancel()
         _worker_task = None
+    _queue = None
 
 
 async def _worker_loop() -> None:
@@ -72,7 +81,14 @@ async def _run_pentest(pentest_id: str) -> None:
         pentest.started_at = utcnow()
         db.commit()
 
-        findings = await _scan(pentest)
+        try:
+            findings = await _scan(pentest)
+        except Exception:  # noqa: BLE001 - a scan bug must not strand the pentest in "running" forever
+            logger.exception("scan failed for pentest %s", pentest.id)
+            pentest.status = "failed"
+            pentest.finished_at = utcnow()
+            db.commit()
+            return
 
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
         for finding in findings:
@@ -202,7 +218,8 @@ MOCK_FINDINGS = [
 
 
 async def _run_mock_scan(pentest: models.Pentest) -> list[dict]:
-    await asyncio.sleep(4 + random.random() * 4)
+    low, high = settings.mock_scan_min_seconds, settings.mock_scan_max_seconds
+    await asyncio.sleep(low + random.random() * max(0.0, high - low))
     sample_size = random.randint(2, len(MOCK_FINDINGS))
     chosen = random.sample(MOCK_FINDINGS, k=sample_size)
     findings = []

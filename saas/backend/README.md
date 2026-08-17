@@ -18,3 +18,17 @@ uv run uvicorn app.main:app --reload --port 8000
 
 Data is stored in `saas/backend/strix_saas.db` (SQLite) by default. Delete
 that file to reset all local data.
+
+## Tests
+
+```
+uv sync --group dev
+uv run pytest --cov --cov-report=term-missing
+```
+
+125 tests, 100% line coverage (enforced: `fail_under = 95` in
+`pyproject.toml`'s `[tool.coverage.report]`). Tests run against an isolated
+temp-file SQLite DB (see `tests/conftest.py`) and a real FastAPI lifespan
+per test (`TestClient` as a context manager), so the pentest job queue
+actually runs — `SAAS_MOCK_SCAN_MIN_SECONDS`/`MAX_SECONDS` are set low in
+tests so mock scans complete in ~20ms instead of the production 4-8s.

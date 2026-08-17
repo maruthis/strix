@@ -30,3 +30,16 @@ Sign in with any email — dev mode (`SAAS_DEV_MODE=1`, the backend's
 default) returns the OTP code directly in the response and displays it on
 the login screen, since no email provider is configured (see
 `../CONFIG.md`).
+
+## Tests
+
+```
+npm run test:coverage
+```
+
+173 tests (Vitest + React Testing Library + `@testing-library/user-event`),
+99.76% statement/line coverage, 98% branch, 93% function (enforced via
+`test.coverage.thresholds` in `vite.config.ts`). Every component and page
+is tested against a mocked `fetch` (see `src/test/mock-fetch.ts`) rather
+than a live backend — `src/test/render.tsx` wraps components with the same
+`QueryClientProvider`/`MemoryRouter` context the real app provides.
