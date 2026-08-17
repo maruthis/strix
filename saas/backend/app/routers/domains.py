@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..deps import current_org, current_user, db_dep
+from ..deps import current_org, current_user, db_dep, require_admin
 from .orgs import _record_audit
 from .pentests import create_and_enqueue_pentest
 
@@ -74,7 +74,12 @@ def verify_domain(domain_id: str, org: models.Organization = Depends(current_org
 
 
 @router.delete("/{domain_id}")
-def remove_domain(domain_id: str, org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> dict:
+def remove_domain(
+    domain_id: str,
+    org: models.Organization = Depends(current_org),
+    _admin=Depends(require_admin),
+    db: Session = Depends(db_dep),
+) -> dict:
     domain = db.get(models.Domain, domain_id)
     if not domain or domain.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")

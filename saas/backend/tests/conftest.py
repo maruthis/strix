@@ -73,3 +73,18 @@ def add_domain(client: TestClient, hostname: str = "app.example.com") -> dict:
     res = client.post("/api/domains", json={"hostname": hostname})
     assert res.status_code == 200, res.text
     return res.json()
+
+
+def add_member(client: TestClient, org: dict, email: str = "member@example.com") -> None:
+    """Invites `email` into `org` as a plain member, logs in as them, and
+    switches to that org — leaving `client` authenticated as a non-admin
+    member of `org` (the caller must already be an admin of `org`)."""
+    invite = client.post("/api/members/invitations", json={"email": email, "role": "member"})
+    assert invite.status_code == 200, invite.text
+    token = invite.json()["dev_accept_token"]
+
+    otp_login(client, email)
+    accept = client.post("/api/members/invitations/accept", json={"token": token})
+    assert accept.status_code == 200, accept.text
+    switch = client.post("/api/auth/switch-org", json={"org_id": org["id"]})
+    assert switch.status_code == 200, switch.text

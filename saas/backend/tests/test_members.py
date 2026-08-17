@@ -115,3 +115,41 @@ def test_remove_member_not_found(auth_client):
     client, _org = auth_client
     res = client.request("DELETE", "/api/members/does-not-exist")
     assert res.status_code == 404
+
+
+def test_dev_accept_token_hidden_outside_dev_mode(auth_client, monkeypatch):
+    from app.routers import members as members_module
+
+    client, _org = auth_client
+    monkeypatch.setattr(members_module.settings, "dev_mode", False)
+
+    res = client.post("/api/members/invitations", json={"email": "teammate@example.com", "role": "member"})
+    assert res.status_code == 200
+    body = res.json()
+    assert "dev_accept_token" not in body
+    assert body["invitation_id"]
+
+
+def test_expired_invitation_rejected(auth_client):
+    from datetime import timedelta
+
+    from app import models
+    from app.db import SessionLocal
+    from app.time_utils import utcnow
+
+    client, _org = auth_client
+    invite = client.post("/api/members/invitations", json={"email": "late@example.com", "role": "member"})
+    token = invite.json()["dev_accept_token"]
+
+    db = SessionLocal()
+    try:
+        row = db.query(models.Invitation).filter_by(token=token).first()
+        row.expires_at = utcnow() - timedelta(days=1)
+        db.commit()
+    finally:
+        db.close()
+
+    otp_login(client, "late@example.com")
+    res = client.post("/api/members/invitations/accept", json={"token": token})
+    assert res.status_code == 410
+    assert res.json()["detail"] == "invitation_expired"

@@ -65,3 +65,20 @@ def test_delete_org_requires_matching_name(auth_client):
 
     me = client.get("/api/auth/me").json()
     assert me["active_org"] is None
+
+
+def test_create_org_sets_active_org_without_explicit_switch(client):
+    """Regression test: POST /api/orgs must leave the session pointed at
+    the new org even if the caller never calls /api/auth/switch-org
+    afterward (conftest's create_org() helper always does call it, which
+    would otherwise mask this)."""
+    otp_login(client)
+    res = client.post("/api/orgs", json={"name": "No Explicit Switch Co"})
+    assert res.status_code == 200
+    org = res.json()
+
+    me = client.get("/api/auth/me").json()
+    assert me["active_org"]["id"] == org["id"]
+
+    # An org-scoped endpoint works immediately, with no switch-org call.
+    assert client.get("/api/repositories").status_code == 200

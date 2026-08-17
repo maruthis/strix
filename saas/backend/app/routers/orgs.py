@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
-from ..deps import current_org, current_user, db_dep, require_admin
+from ..deps import current_org, current_session, current_user, db_dep, require_admin
 from ..time_utils import utcnow
 
 router = APIRouter(prefix="/api/orgs", tags=["orgs"])
@@ -29,6 +29,7 @@ class DeleteOrgIn(BaseModel):
 def create_org(
     body: CreateOrgIn,
     user: models.User = Depends(current_user),
+    sess: models.Session_ = Depends(current_session),
     db: Session = Depends(db_dep),
 ) -> schemas.OrganizationOut:
     org = models.Organization(name=body.name.strip() or "Untitled")
@@ -44,6 +45,11 @@ def create_org(
             trial_ends_at=utcnow() + timedelta(days=7),
         )
     )
+    # Switch the caller's active org to the one they just created — without
+    # this, any caller other than the frontend's onboarding flow (which
+    # happens to always follow up with an explicit switch-org call) would
+    # get 400 no_active_org from the very next org-scoped request.
+    sess.active_org_id = org.id
     db.commit()
     _record_audit(db, org.id, user.id, "org.created", org.name)
     return schemas.OrganizationOut.model_validate(org)

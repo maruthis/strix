@@ -77,7 +77,9 @@ def delete_knowledge(entry_id: str, org: models.Organization = Depends(current_o
 def relevant_entries(db: Session, org_id: str, *, repository_id: str | None = None, domain_id: str | None = None) -> list[models.KnowledgeEntry]:
     """Knowledge entries that should be injected into agent context for a
     given scan/chat target: global entries plus ones scoped to this exact
-    repository/domain. Used by jobs.py and the chat router (TASKS.md P8-4)."""
+    repository/domain. Currently only used by the chat router's mock reply
+    — jobs.py's real-scan path does not call this yet (see TASKS.md P8-4;
+    that's a known, tracked gap, not an oversight)."""
     q = db.query(models.KnowledgeEntry).filter_by(org_id=org_id)
     entries = q.all()
     return [

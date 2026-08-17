@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -39,7 +39,13 @@ def get_billing(org: models.Organization = Depends(current_org), db: Session = D
 @router.post("/add-card")
 def add_card(org: models.Organization = Depends(current_org), _admin=Depends(require_admin), db: Session = Depends(db_dep)) -> dict:
     provider = get_billing_provider()
-    provider.attach_card(org_id=org.id)
+    try:
+        provider.attach_card(org_id=org.id)
+    except NotImplementedError as exc:
+        # RealStripeProvider is scaffolded but not implemented yet (see
+        # providers/billing.py) — surface a clear error instead of a 500
+        # once a real Stripe key is configured.
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, detail="billing_provider_not_fully_configured") from exc
     sub = _get_or_create_subscription(db, org.id)
     sub.card_added = True
     sub.status = "active"
@@ -50,4 +56,7 @@ def add_card(org: models.Organization = Depends(current_org), _admin=Depends(req
 @router.get("/invoices")
 def list_invoices(org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> list[dict]:
     provider = get_billing_provider()
-    return provider.list_invoices(org_id=org.id)
+    try:
+        return provider.list_invoices(org_id=org.id)
+    except NotImplementedError as exc:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, detail="billing_provider_not_fully_configured") from exc

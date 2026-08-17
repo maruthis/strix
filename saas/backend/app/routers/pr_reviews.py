@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..deps import current_org, db_dep
+from ..deps import current_org, db_dep, require_admin
 from ..jobs import MOCK_FINDINGS
 from ..providers import get_github_provider
 
@@ -17,12 +17,11 @@ router = APIRouter(prefix="/api/pr-reviews", tags=["pr-reviews"])
 STATUS_TABS = ["all", "awaiting_merge", "needs_attention", "merged_with_open_findings", "passed"]
 
 
-def _serialize(p: models.PRReview, db: Session) -> dict:
-    repo = db.get(models.Repository, p.repository_id)
+def _serialize(p: models.PRReview, repo_names: dict[str, str]) -> dict:
     return {
         "id": p.id,
         "repository_id": p.repository_id,
-        "repository_full_name": repo.full_name if repo else "",
+        "repository_full_name": repo_names.get(p.repository_id, ""),
         "pr_number": p.pr_number,
         "title": p.title,
         "author": p.author,
@@ -31,6 +30,11 @@ def _serialize(p: models.PRReview, db: Session) -> dict:
         "created_at": p.created_at.isoformat(),
         "updated_at": p.updated_at.isoformat(),
     }
+
+
+def _serialize_one(p: models.PRReview, db: Session) -> dict:
+    repo = db.get(models.Repository, p.repository_id)
+    return _serialize(p, {p.repository_id: repo.full_name if repo else ""})
 
 
 @router.get("")
@@ -57,7 +61,14 @@ def list_pr_reviews(
     for r in all_reviews:
         counts[r.status] = counts.get(r.status, 0) + 1
 
-    return {"items": [_serialize(r, db) for r in reviews], "counts": counts}
+    # One batched lookup for every repository referenced by these reviews,
+    # instead of one query per row (was N+1 — see saas/TASKS.md).
+    repo_ids = {r.repository_id for r in reviews if r.repository_id}
+    repo_names = {
+        repo.id: repo.full_name for repo in db.query(models.Repository).filter(models.Repository.id.in_(repo_ids)).all()
+    }
+
+    return {"items": [_serialize(r, repo_names) for r in reviews], "counts": counts}
 
 
 class NewPRReviewIn(BaseModel):
@@ -133,7 +144,7 @@ def trigger_pr_review(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="repository_not_found")
 
     review = _run_pr_review(db, org, repo, body.pr_number, body.title, body.author)
-    return _serialize(review, db)
+    return _serialize_one(review, db)
 
 
 # --------------------------------------------------------------------------
@@ -188,6 +199,7 @@ class UpdateSettingsIn(BaseModel):
 def update_settings(
     body: UpdateSettingsIn,
     org: models.Organization = Depends(current_org),
+    _admin=Depends(require_admin),
     db: Session = Depends(db_dep),
 ) -> dict:
     settings_row = _get_or_create_settings(db, org.id)

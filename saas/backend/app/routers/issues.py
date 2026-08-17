@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -61,16 +62,24 @@ def list_issues(
         q = q.filter(models.Issue.domain_id == domain_id)
     issues = q.order_by(models.Issue.created_at.desc()).all()
 
-    all_open = db.query(models.Issue).filter_by(org_id=org.id).filter(models.Issue.status != "fixed", models.Issue.status != "ignored").all()
+    # Grouped SQL aggregates instead of pulling every org issue's full row
+    # into Python twice more just to tally severities/statuses (was 3x full
+    # scans — see saas/TASKS.md).
     severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-    for issue in all_open:
-        severity_counts[issue.severity] = severity_counts.get(issue.severity, 0) + 1
+    severity_rows = (
+        db.query(models.Issue.severity, func.count(models.Issue.id))
+        .filter(models.Issue.org_id == org.id, models.Issue.status.notin_(["fixed", "ignored"]))
+        .group_by(models.Issue.severity)
+        .all()
+    )
+    for sev, count in severity_rows:
+        severity_counts[sev] = count
 
     status_counts = {s: 0 for s in ["all", "open", "in_progress", "snoozed", "fixed", "ignored"]}
-    all_issues = db.query(models.Issue).filter_by(org_id=org.id).all()
-    status_counts["all"] = len(all_issues)
-    for issue in all_issues:
-        status_counts[issue.status] = status_counts.get(issue.status, 0) + 1
+    status_rows = db.query(models.Issue.status, func.count(models.Issue.id)).filter(models.Issue.org_id == org.id).group_by(models.Issue.status).all()
+    for st, count in status_rows:
+        status_counts[st] = count
+        status_counts["all"] += count
 
     return {
         "items": [_serialize(i) for i in issues],

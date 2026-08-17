@@ -8,15 +8,17 @@ import { Modal } from "../../components/shared/Modal";
 import { FilterBar } from "../../components/shared/FilterBar";
 import { Button, Field, Select, TextArea } from "../../components/shared/Form";
 import { toast } from "../../components/shared/Toast";
+import { useDebouncedValue } from "../../lib/useDebouncedValue";
 
 export default function KnowledgeList() {
   const queryClient = useQueryClient();
   const [addOpen, setAddOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
 
   const { data: entries, isLoading } = useQuery({
-    queryKey: ["knowledge", search],
-    queryFn: () => api.get<KnowledgeEntry[]>(`/api/knowledge${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+    queryKey: ["knowledge", debouncedSearch],
+    queryFn: () => api.get<KnowledgeEntry[]>(`/api/knowledge${debouncedSearch ? `?search=${encodeURIComponent(debouncedSearch)}` : ""}`),
   });
 
   const remove = useMutation({

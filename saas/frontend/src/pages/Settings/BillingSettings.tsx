@@ -4,6 +4,7 @@ import type { Subscription } from "../../api/types";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { Button } from "../../components/shared/Form";
 import { toast } from "../../components/shared/Toast";
+import { formatDate } from "../../lib/format";
 
 export default function BillingSettings() {
   const queryClient = useQueryClient();
@@ -36,7 +37,7 @@ export default function BillingSettings() {
           )}
         </div>
         {sub.trial_ends_at && sub.status === "trialing" && (
-          <p className="mt-3 text-xs text-[#888]">Trial ends {new Date(sub.trial_ends_at).toLocaleDateString()}.</p>
+          <p className="mt-3 text-xs text-[#888]">Trial ends {formatDate(sub.trial_ends_at)}.</p>
         )}
       </div>
 

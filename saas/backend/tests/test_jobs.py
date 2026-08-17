@@ -67,6 +67,77 @@ async def test_run_pentest_marks_failed_on_scan_exception(monkeypatch):
         db.close()
 
 
+async def test_run_pentest_marks_failed_when_finding_processing_raises(monkeypatch):
+    """Regression test: the try/except used to only wrap the _scan() call,
+    not the loop that turns findings into Issue rows. A successful scan
+    that returns a malformed finding (missing an expected key) would then
+    raise past _run_pentest uncaught, leaving the pentest stuck in
+    "running" forever — see saas/TASKS.md and jobs.py's comment on this."""
+    db = SessionLocal()
+    try:
+        org, repo = _make_org_and_repo(db)
+        pentest = _make_pentest(db, org, repo)
+        pentest_id = pentest.id
+    finally:
+        db.close()
+
+    async def _scan_returns_malformed_finding(_pentest, _llm_settings):
+        return [{"severity": "critical"}]  # missing title/description/etc.
+
+    monkeypatch.setattr(jobs, "_scan", _scan_returns_malformed_finding)
+    await jobs._run_pentest(pentest_id)
+
+    db = SessionLocal()
+    try:
+        reloaded = db.get(models.Pentest, pentest_id)
+        assert reloaded.status == "failed"
+        assert reloaded.finished_at is not None
+        # No partial Issue rows from the failed attempt were committed.
+        assert db.query(models.Issue).filter_by(pentest_id=pentest_id).count() == 0
+    finally:
+        db.close()
+
+
+async def test_run_pentest_tolerates_unexpected_severity_value(monkeypatch):
+    """A finding with a severity outside the usual 4 buckets should not
+    crash the whole pentest — it's counted under its own key instead."""
+    db = SessionLocal()
+    try:
+        org, repo = _make_org_and_repo(db)
+        pentest = _make_pentest(db, org, repo)
+        pentest_id = pentest.id
+    finally:
+        db.close()
+
+    finding = {
+        "title": "Weird finding",
+        "description": "",
+        "severity": "informational",
+        "cvss": None,
+        "cvss_breakdown": {},
+        "technical_analysis": "",
+        "remediation_steps": "",
+        "poc_description": "",
+        "target": "x",
+        "endpoint": "",
+        "fix_effort": "low",
+    }
+
+    async def _scan_returns_odd_severity(_pentest, _llm_settings):
+        return [finding]
+
+    monkeypatch.setattr(jobs, "_scan", _scan_returns_odd_severity)
+    await jobs._run_pentest(pentest_id)
+
+    db = SessionLocal()
+    try:
+        reloaded = db.get(models.Pentest, pentest_id)
+        assert reloaded.status == "completed"
+        assert reloaded.severity_counts["informational"] == 1
+    finally:
+        db.close()
+
+
 async def test_run_pentest_success_updates_repo_last_tested():
     db = SessionLocal()
     try:

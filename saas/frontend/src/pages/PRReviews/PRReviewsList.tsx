@@ -12,6 +12,7 @@ import { ViewToggle, type ViewMode } from "../../components/shared/ViewToggle";
 import { Board } from "../../components/shared/Board";
 import { toast } from "../../components/shared/Toast";
 import { timeAgo } from "../../lib/format";
+import { useDebouncedValue } from "../../lib/useDebouncedValue";
 
 const TABS = [
   { key: "all", label: "All" },
@@ -38,11 +39,12 @@ export default function PRReviewsList() {
   // Board mode always shows every status grouped into columns, so it ignores
   // the status tab (which only applies to list mode).
   const effectiveStatus = view === "board" ? "all" : status;
+  const debouncedSearch = useDebouncedValue(search, 300);
   const { data, isLoading } = useQuery({
-    queryKey: ["pr-reviews", effectiveStatus, search],
+    queryKey: ["pr-reviews", effectiveStatus, debouncedSearch],
     queryFn: () =>
       api.get<PRReviewsResponse>(
-        `/api/pr-reviews?${effectiveStatus !== "all" ? `status_filter=${effectiveStatus}&` : ""}${search ? `search=${encodeURIComponent(search)}` : ""}`
+        `/api/pr-reviews?${effectiveStatus !== "all" ? `status_filter=${effectiveStatus}&` : ""}${debouncedSearch ? `search=${encodeURIComponent(debouncedSearch)}` : ""}`
       ),
   });
 

@@ -109,3 +109,32 @@ def test_list_issues_domain_id_filter(auth_client):
     other_domain = add_domain(client, "other.example.com")
     by_other = client.get(f"/api/issues?domain_id={other_domain['id']}").json()
     assert by_other["items"] == []
+
+
+def test_severity_and_status_counts_correct_across_multiple_scans(auth_client):
+    """Regression check for the 3x-full-scan -> grouped-aggregate refactor:
+    counts must stay accurate once issues span several severities and one
+    gets moved to a status excluded from severity_counts."""
+    client, _org = auth_client
+    repo_a = add_repo(client, "acme/widgets")
+    repo_b = add_repo(client, "acme/gadgets")
+    _run_pentest_to_completion(client, repo_a)
+    _run_pentest_to_completion(client, repo_b)
+
+    all_items = client.get("/api/issues").json()
+    # Cross-check: severity_counts total (open+in_progress+snoozed, i.e. not
+    # fixed/ignored) matches len(items) when no status filter narrows them,
+    # since a fresh scan's issues all start "open".
+    total_severity = sum(all_items["severity_counts"].values())
+    assert total_severity == len(all_items["items"])
+    assert total_severity > 0
+
+    # Move one issue to "fixed" and confirm both aggregates update together
+    # and stay internally consistent.
+    issue_id = all_items["items"][0]["id"]
+    client.patch(f"/api/issues/{issue_id}/status", json={"status": "fixed"})
+
+    after = client.get("/api/issues").json()
+    assert after["status_counts"]["fixed"] == 1
+    assert after["status_counts"]["all"] == len(all_items["items"])
+    assert sum(after["severity_counts"].values()) == total_severity - 1

@@ -1,4 +1,4 @@
-from .conftest import add_domain
+from .conftest import add_domain, add_member
 
 
 def test_list_domains_empty(auth_client):
@@ -69,3 +69,18 @@ def test_verify_domain_not_found(auth_client):
     client, _org = auth_client
     res = client.post("/api/domains/does-not-exist/verify")
     assert res.status_code == 404
+
+
+def test_remove_domain_requires_admin_but_add_verify_scan_dont(auth_client):
+    client, org = auth_client
+    domain = add_domain(client)
+    add_member(client, org)
+
+    remove = client.request("DELETE", f"/api/domains/{domain['id']}")
+    assert remove.status_code == 403
+    assert remove.json()["detail"] == "admin_required"
+
+    # Everyday usage actions stay member-accessible.
+    assert client.post("/api/domains", json={"hostname": "member-added.example.com"}).status_code == 200
+    assert client.post(f"/api/domains/{domain['id']}/verify").status_code == 200
+    assert client.post(f"/api/domains/{domain['id']}/scan").status_code == 200

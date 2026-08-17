@@ -1,4 +1,4 @@
-from .conftest import add_repo
+from .conftest import add_member, add_repo
 
 
 def test_settings_defaults_and_update(auth_client):
@@ -28,6 +28,32 @@ def test_settings_defaults_and_update(auth_client):
     assert body["review_cap_per_dev"] == 10
     # Unset fields are unaffected by a partial update.
     assert body["allow_overage_reviews"] is True
+
+
+def test_update_settings_requires_admin(auth_client):
+    client, org = auth_client
+    add_member(client, org)
+    res = client.patch("/api/pr-reviews/settings", json={"block_prs_on_findings": False})
+    assert res.status_code == 403
+    assert res.json()["detail"] == "admin_required"
+    # A member can still read settings.
+    assert client.get("/api/pr-reviews/settings").status_code == 200
+
+
+def test_list_pr_reviews_repository_names_correct_with_multiple_repos(auth_client):
+    """Regression check for the N+1 -> batched-lookup refactor: repository
+    names must still resolve correctly when reviews span several repos."""
+    client, _org = auth_client
+    repo_a = add_repo(client, "acme/widgets")
+    repo_b = add_repo(client, "acme/gadgets")
+
+    client.post("/api/pr-reviews", json={"repository_id": repo_a["id"], "pr_number": 1, "title": "A", "author": "x"})
+    client.post("/api/pr-reviews", json={"repository_id": repo_b["id"], "pr_number": 2, "title": "B", "author": "x"})
+
+    items = client.get("/api/pr-reviews").json()["items"]
+    names_by_repo = {i["repository_id"]: i["repository_full_name"] for i in items}
+    assert names_by_repo[repo_a["id"]] == "acme/widgets"
+    assert names_by_repo[repo_b["id"]] == "acme/gadgets"
 
 
 def test_trigger_review_repository_not_found(auth_client):

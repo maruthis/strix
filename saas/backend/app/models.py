@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -79,6 +79,7 @@ class OtpCode(TimestampMixin, Base):
     code: Mapped[str] = mapped_column(String)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Invitation(TimestampMixin, Base):
@@ -90,6 +91,7 @@ class Invitation(TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String, default="member")
     token: Mapped[str] = mapped_column(String, default=lambda: uuid.uuid4().hex)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utcnow() + timedelta(days=7))
 
 
 # --------------------------------------------------------------------------

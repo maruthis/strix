@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..deps import current_org, current_user, db_dep
+from ..deps import current_org, current_user, db_dep, require_admin
 from ..time_utils import utcnow
 from .orgs import _record_audit
 
@@ -48,8 +48,14 @@ def create_token(
     body: NewTokenIn,
     org: models.Organization = Depends(current_org),
     user: models.User = Depends(current_user),
+    _admin=Depends(require_admin),
     db: Session = Depends(db_dep),
 ) -> dict:
+    # Admin-only: tokens aren't scoped to their creator (no user_id column),
+    # so any token created is effectively an org-wide credential, and its
+    # `scopes` are accepted as-is with no allow-list check against the
+    # caller's own role — a non-admin could otherwise mint a token with
+    # broader scopes (e.g. organizations:write) than they hold themselves.
     raw_token = f"strix_{secrets.token_urlsafe(32)}"
     token = models.ApiToken(
         org_id=org.id,
@@ -67,7 +73,14 @@ def create_token(
 
 
 @router.delete("/{token_id}")
-def revoke_token(token_id: str, org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> dict:
+def revoke_token(
+    token_id: str,
+    org: models.Organization = Depends(current_org),
+    _admin=Depends(require_admin),
+    db: Session = Depends(db_dep),
+) -> dict:
+    # Admin-only: without this, any member could revoke another member's
+    # (or an admin's, or CI's) token.
     token = db.get(models.ApiToken, token_id)
     if not token or token.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")

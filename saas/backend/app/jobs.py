@@ -88,52 +88,62 @@ async def _run_pentest(pentest_id: str) -> None:
 
         llm_settings = db.get(models.OrgLlmSettings, pentest.org_id)
 
+        # Everything from here on — running the scan itself, *and* turning
+        # its findings into Issue rows — is wrapped in one try/except. It
+        # used to only wrap the _scan() call, so a bad finding (e.g. an
+        # unexpected `severity` value hitting the dict-indexed counter
+        # below) raised past this function uncaught, leaving the pentest
+        # stuck in "running" forever with no finished_at — contradicting
+        # this module's "the job queue never gets stuck" guarantee. Nothing
+        # from a failed run gets committed: db.add() below only stages
+        # rows, so a mid-loop exception discards them along with the
+        # attempt, which is what we want (no partial finding sets).
         try:
             findings = await _scan(pentest, llm_settings)
-        except Exception:  # noqa: BLE001 - a scan bug must not strand the pentest in "running" forever
+
+            severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+            for finding in findings:
+                severity_counts[finding["severity"]] = severity_counts.get(finding["severity"], 0) + 1
+                db.add(
+                    models.Issue(
+                        org_id=pentest.org_id,
+                        pentest_id=pentest.id,
+                        repository_id=pentest.target_id if pentest.target_type == "repository" else None,
+                        domain_id=pentest.target_id if pentest.target_type == "domain" else None,
+                        title=finding["title"],
+                        description=finding["description"],
+                        severity=finding["severity"],
+                        cvss=finding["cvss"],
+                        cvss_breakdown=finding["cvss_breakdown"],
+                        technical_analysis=finding["technical_analysis"],
+                        remediation_steps=finding["remediation_steps"],
+                        poc_description=finding["poc_description"],
+                        target=finding["target"],
+                        endpoint=finding["endpoint"],
+                        fix_effort=finding["fix_effort"],
+                    )
+                )
+
+            pentest.status = "completed"
+            pentest.finished_at = utcnow()
+            pentest.severity_counts = severity_counts
+
+            if pentest.target_type == "repository":
+                repo = db.get(models.Repository, pentest.target_id)
+                if repo:
+                    repo.last_tested_at = pentest.finished_at
+            elif pentest.target_type == "domain":
+                domain = db.get(models.Domain, pentest.target_id)
+                if domain:
+                    domain.last_tested_at = pentest.finished_at
+
+            db.commit()
+        except Exception:  # noqa: BLE001 - a scan/processing bug must not strand the pentest in "running" forever
             logger.exception("scan failed for pentest %s", pentest.id)
+            db.rollback()
             pentest.status = "failed"
             pentest.finished_at = utcnow()
             db.commit()
-            return
-
-        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-        for finding in findings:
-            severity_counts[finding["severity"]] += 1
-            db.add(
-                models.Issue(
-                    org_id=pentest.org_id,
-                    pentest_id=pentest.id,
-                    repository_id=pentest.target_id if pentest.target_type == "repository" else None,
-                    domain_id=pentest.target_id if pentest.target_type == "domain" else None,
-                    title=finding["title"],
-                    description=finding["description"],
-                    severity=finding["severity"],
-                    cvss=finding["cvss"],
-                    cvss_breakdown=finding["cvss_breakdown"],
-                    technical_analysis=finding["technical_analysis"],
-                    remediation_steps=finding["remediation_steps"],
-                    poc_description=finding["poc_description"],
-                    target=finding["target"],
-                    endpoint=finding["endpoint"],
-                    fix_effort=finding["fix_effort"],
-                )
-            )
-
-        pentest.status = "completed"
-        pentest.finished_at = utcnow()
-        pentest.severity_counts = severity_counts
-
-        if pentest.target_type == "repository":
-            repo = db.get(models.Repository, pentest.target_id)
-            if repo:
-                repo.last_tested_at = pentest.finished_at
-        elif pentest.target_type == "domain":
-            domain = db.get(models.Domain, pentest.target_id)
-            if domain:
-                domain.last_tested_at = pentest.finished_at
-
-        db.commit()
     finally:
         db.close()
 

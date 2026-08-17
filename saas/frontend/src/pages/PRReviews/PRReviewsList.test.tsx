@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
 import { mockFetchImpl, mockFetchJson } from "../../test/mock-fetch";
@@ -58,6 +58,24 @@ describe("PRReviewsList", () => {
     renderWithProviders(<PRReviewsList />);
     await screen.findByText(/Add withdraw endpoint/);
     await userEvent.type(screen.getByPlaceholderText("Search repository, title, or PR number"), "x");
+  });
+
+  it("debounces search input instead of firing a request per keystroke", async () => {
+    const fetchMock = vi.fn(async () => jsonRes({ items: [REVIEW], counts: { all: 1 } }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithProviders(<PRReviewsList />);
+    await screen.findByText(/Add withdraw endpoint/);
+    const callsBeforeTyping = fetchMock.mock.calls.length;
+
+    await userEvent.type(screen.getByPlaceholderText("Search repository, title, or PR number"), "widgets");
+    // No new request fires immediately for each keystroke.
+    expect(fetchMock.mock.calls.length).toBe(callsBeforeTyping);
+
+    // Once typing settles, exactly one debounced request goes out with the
+    // full search term.
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("search=widgets")).length).toBe(1);
+    });
   });
 
   it("switches to board view, hiding tabs", async () => {

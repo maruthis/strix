@@ -40,3 +40,22 @@ def test_create_token_with_no_expiration(auth_client):
     client, _org = auth_client
     res = client.post("/api/settings/tokens", json={"name": "Long-lived", "expires_in_days": None})
     assert res.json()["expires_at"] is None
+
+
+def test_create_and_revoke_token_require_admin(auth_client):
+    from .conftest import add_member
+
+    client, org = auth_client
+    admin_token = client.post("/api/settings/tokens", json={"name": "Admin token"}).json()
+
+    add_member(client, org)
+    create = client.post("/api/settings/tokens", json={"name": "Member token"})
+    assert create.status_code == 403
+    assert create.json()["detail"] == "admin_required"
+
+    revoke = client.request("DELETE", f"/api/settings/tokens/{admin_token['id']}")
+    assert revoke.status_code == 403
+    assert revoke.json()["detail"] == "admin_required"
+
+    # A member can still see the list.
+    assert client.get("/api/settings/tokens").status_code == 200

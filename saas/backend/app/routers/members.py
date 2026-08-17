@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..deps import current_org, current_user, db_dep, require_admin
+from ..settings import settings
 from ..time_utils import utcnow
 from .orgs import _record_audit
 
@@ -57,9 +58,14 @@ def create_invitation(
     db.add(invite)
     db.commit()
     _record_audit(db, org.id, user.id, "member.invited", invite.email, {"role": invite.role})
-    # No email provider wired up (see CONFIG.md) — in dev mode the
-    # invitation token is returned directly so the accept flow is testable.
-    return {"ok": True, "invitation_id": invite.id, "dev_accept_token": invite.token}
+    result: dict = {"ok": True, "invitation_id": invite.id}
+    if settings.dev_mode:
+        # No email provider wired up (see CONFIG.md) — in dev mode the
+        # invitation token is returned directly so the accept flow is
+        # testable. Gated the same way otp_start's dev_code is: never
+        # leak a bearer credential in a real deployment.
+        result["dev_accept_token"] = invite.token
+    return result
 
 
 @router.post("/invitations/{invitation_id}/revoke")
@@ -90,6 +96,8 @@ def accept_invitation(
     invite = db.query(models.Invitation).filter_by(token=body.token, accepted_at=None).first()
     if not invite:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="invalid_or_used_invitation")
+    if invite.expires_at < utcnow():
+        raise HTTPException(status.HTTP_410_GONE, detail="invitation_expired")
     if invite.email != user.email.lower():
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="invitation_email_mismatch")
 

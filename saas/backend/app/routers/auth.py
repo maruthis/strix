@@ -16,6 +16,7 @@ from ..time_utils import utcnow
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 OTP_TTL_MINUTES = 10
+MAX_OTP_ATTEMPTS = 5
 
 
 class OtpStartIn(BaseModel):
@@ -65,13 +66,26 @@ def otp_start(body: OtpStartIn, db: Session = Depends(db_dep)) -> dict:
 @router.post("/otp/verify")
 def otp_verify(body: OtpVerifyIn, response: Response, db: Session = Depends(db_dep)) -> schemas.MeOut:
     email = body.email.lower()
+    # Look up the latest *pending* code for this email regardless of what
+    # was submitted (not filtered by code == body.code) — that's what lets
+    # us count failed attempts against it and lock it out below. A 6-digit
+    # code with unlimited guesses is brute-forceable within its TTL; this
+    # caps it at MAX_OTP_ATTEMPTS tries per requested code.
     otp = (
         db.query(models.OtpCode)
-        .filter(models.OtpCode.email == email, models.OtpCode.code == body.code, models.OtpCode.consumed.is_(False))
+        .filter(models.OtpCode.email == email, models.OtpCode.consumed.is_(False))
         .order_by(models.OtpCode.created_at.desc())
         .first()
     )
     if not otp or otp.expires_at < utcnow():
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="invalid_or_expired_code")
+    if otp.attempts >= MAX_OTP_ATTEMPTS:
+        otp.consumed = True
+        db.commit()
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="too_many_attempts")
+    if otp.code != body.code:
+        otp.attempts += 1
+        db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="invalid_or_expired_code")
     otp.consumed = True
 
