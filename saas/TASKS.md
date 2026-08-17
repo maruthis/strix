@@ -16,22 +16,22 @@ Conventions:
 
 ## Phase 0 — Foundations & architecture decisions
 
-- [ ] `P0-1` Add `upstream` remote (usestrix/strix), disable its push URL — **done**
-- [ ] `P0-2` Create `saas/` isolation directory + `README.md` + `SYNC.md` — **done**
-- [ ] `P0-3` Choose backend stack (FastAPI + Postgres + SQLAlchemy/Alembic, or equivalent) and scaffold `saas/backend/`
+- [x] `P0-1` Add `upstream` remote (usestrix/strix), disable its push URL — **done**
+- [x] `P0-2` Create `saas/` isolation directory + `README.md` + `SYNC.md` — **done**
+- [x] `P0-3` Backend stack: FastAPI + SQLAlchemy, SQLite by default (`DATABASE_URL` swaps to Postgres) — scaffolded in `saas/backend/`. Alembic migrations deferred (currently `Base.metadata.create_all`); add before this touches a shared environment.
 - [ ] `P0-4` Choose frontend routing/state stack (React Router + React Query/Zustand) and scaffold `saas/frontend/`
-- [ ] `P0-5` Define multi-tenant data model: `Organization`, `User`, `Membership(role)`, `Repository`, `Domain`, `Pentest`, `Issue`, `PRReview`, `KnowledgeEntry`, `ApiToken`, `Webhook`, `AuditLogEntry`, `Subscription`
-- [ ] `P0-6` Set up background job runner/queue for scheduled pentests, PR-review scans, chat agent runs
-- [ ] `P0-7` Define the invocation contract between `saas/backend` and the upstream `strix` agent engine (inputs: repo/domain/scope/knowledge context → outputs: findings/issues) — treat `strix/` as a library dependency, never fork its code
+- [x] `P0-5` Data model implemented in `saas/backend/app/models.py`: `Organization`, `User`, `Membership`, `Session_`, `OtpCode`, `Invitation`, `Repository`, `Domain`, `PentestSchedule`, `Pentest`, `Issue`, `PRReview`, `PRReviewSettings`, `KnowledgeEntry`, `ChatSession`/`ChatMessage`, `ApiToken`, `Webhook`, `AuditLogEntry`, `Subscription`
+- [x] `P0-6` In-process async job queue (`saas/backend/app/jobs.py`) — no Redis/Celery; started from the FastAPI lifespan in `app/main.py`
+- [x] `P0-7` Invocation contract defined and implemented in `jobs.py`'s `_run_real_scan`/`_run_mock_scan`: mock scanner by default, real `strix.core.runner.run_strix_scan` behind `SAAS_ENABLE_REAL_SCAN=1` with fallback-to-mock on failure. Real-scan finding translation back into `Issue` rows is a follow-up once Docker/LLM creds are available to exercise it.
 - [ ] `P0-8` Set up CI (in `saas/`, namespaced workflow file), staging env, secrets management (GitHub App key, Stripe keys, LLM keys)
 
 ## Phase 1 — Auth, Organizations, Members
 
-- [ ] `P1-1` User auth (email/OTP or OAuth) — reuse patterns from `strix/interface/viewer/auth.py`, extend to full account/session model
-- [ ] `P1-2` Org creation + org switcher (top-left dropdown)
-- [ ] `P1-3` Roles/permissions model (Admin role); gate destructive actions
-- [ ] `P1-4` `/settings/members`: team members table, role badge, invite flow, pending invitations, remove/change-role
-- [ ] `P1-5` `/settings` (General): profile block, 2FA toggle, org name edit+save, Organization ID display, Danger Zone (delete org + confirmation), Sign Out
+- [ ] `P1-1` User auth — backend done (`app/routers/auth.py`: OTP start/verify, session cookie, dev-mode code passthrough per `CONFIG.md`); frontend login screen pending
+- [ ] `P1-2` Org creation + org switcher — backend done (`app/routers/orgs.py`, `auth.py`'s `switch-org`); frontend dropdown pending
+- [x] `P1-3` Roles/permissions model — `Membership.role`, `require_admin` dependency gates destructive actions (`app/deps.py`)
+- [ ] `P1-4` `/settings/members` — backend done (`app/routers/members.py`: list, invite, revoke, accept, role update, remove); frontend table/modal pending
+- [ ] `P1-5` `/settings` (General) — org rename/delete backend done (`app/routers/orgs.py`); 2FA toggle field exists on `User` model but has no verification flow yet; frontend page pending
 
 ## Phase 2 — App shell, navigation, dashboard
 
@@ -43,63 +43,63 @@ Conventions:
 
 ## Phase 3 — Repositories + GitHub App integration
 
-- [ ] `P3-1` `/repositories` list: repo name, Issues count, Auto-Review pill, Last Tested
-- [ ] `P3-2` "Add Repository" flow via GitHub App install/OAuth
-- [ ] `P3-3` Backend: GitHub App manifest, install callback, store installation token per org, list accessible repos
-- [ ] `P3-4` Per-repo settings: toggle auto-review, trigger manual scan, link to Pentests/Issues
+- [ ] `P3-1` `/repositories` list — backend done (`app/routers/repositories.py`, includes `open_issues_count`/`last_tested_at`); frontend table pending
+- [ ] `P3-2` "Add Repository" flow — backend done against `GitHubProvider.installable_repositories()` (mock catalog by default, see `CONFIG.md`); frontend picker pending
+- [ ] `P3-3` GitHub App integration: `app/providers/github.py` defines the interface + working `MockGitHubProvider`; `RealGitHubProvider` is a scaffold (JWT/installation-token exchange, webhook signature verification stubbed) — needs a registered GitHub App to finish, see `CONFIG.md`
+- [ ] `P3-4` Per-repo settings — backend done (toggle auto-review, `POST /{id}/scan` manual trigger); frontend pending
 
 ## Phase 4 — PR Reviews
 
-- [ ] `P4-1` `/pr-reviews` list with tabs (All/Awaiting Merge/Needs Attention/Merged with Open Findings/Passed) + counts
-- [ ] `P4-2` Filters: search, repo dropdown, date range, List/Board toggle
-- [ ] `P4-3` Empty state + "@strix" tip; "Connect Repository" / "Review a Pull Request" actions
-- [ ] `P4-4` PR Review Settings modal: re-review on push, target branches, approve clean PRs, block PRs on findings + blocking severities, exclude bot accounts + usernames, allow overage reviews, review cap per developer
-- [ ] `P4-5` Backend: GitHub webhook receiver, `@strix` mention parsing, check-run/status API for blocking merges, finding comments
-- [ ] `P4-6` Board (kanban) view
+- [ ] `P4-1` `/pr-reviews` list with tabs — backend done (`app/routers/pr_reviews.py` `list_pr_reviews`, status counts per tab); frontend pending
+- [ ] `P4-2` Filters — backend supports `status`, `repository_id`, `search`; date range and List/Board toggle are frontend-only, pending
+- [ ] `P4-3` Empty state + tip / actions — backend done (`POST /api/pr-reviews` manual trigger); frontend pending
+- [ ] `P4-4` PR Review Settings — backend done (`GET`/`PATCH /api/pr-reviews/settings`, `PRReviewSettings` model has every field from the screenshot); frontend modal pending
+- [ ] `P4-5` GitHub webhook receiver scaffolded (`POST /api/webhooks/github` in `app/routers/pr_reviews.py`, signature verification wired to the provider) but does not yet parse `X-GitHub-Event`/`@strix` mentions or call `trigger_pr_review` — noted inline in the handler
+- [ ] `P4-6` Board (kanban) view — frontend-only, pending
 
 ## Phase 5 — Domains & APIs
 
-- [ ] `P5-1` `/domains` list + empty state
-- [ ] `P5-2` Add Domain flow + ownership verification (DNS TXT or file)
-- [ ] `P5-3` Domain detail: discovered APIs, last scan status, linked pentests/issues
-- [ ] `P5-4` Backend: verification job gating scans against unverified targets
+- [ ] `P5-1` `/domains` list — backend done (`app/routers/domains.py`); frontend pending
+- [ ] `P5-2` Add Domain flow — backend done; `verify_domain` is currently a mock (marks verified immediately, see docstring) rather than a real DNS TXT/file check — swap in an actual resolver call when ready
+- [ ] `P5-3` Domain detail — backend has scan history via `/api/pentests?target_type=domain`; frontend detail page pending
+- [x] `P5-4` Scans are gated on `domain.verified` — `POST /api/domains/{id}/scan` returns 400 `domain_not_verified` otherwise (tested)
 
 ## Phase 6 — Pentests
 
-- [ ] `P6-1` `/pentests` list: search, status/type filters, date range, Schedules button, empty state
-- [ ] `P6-2` "New Pentest" flow: target selection, scan mode, knowledge context selection
-- [ ] `P6-3` Pentest run detail view (extend `RunDetails.tsx`, `PastRunsView.tsx`, `IssueSeveritySummary.tsx`, `live/` components to fetch from `saas/backend` instead of local run dir)
-- [ ] `P6-4` Scheduling: recurring pentest config + Schedules management view
-- [ ] `P6-5` Wire pentest completion → generate/dedup Issues, update Repository/Domain "Last Tested"
+- [ ] `P6-1` `/pentests` list — backend done (`app/routers/pentests.py`, filters by status/target_type); frontend pending
+- [ ] `P6-2` "New Pentest" flow — backend done (`POST /api/pentests`, enqueues onto the job worker); knowledge-context selection is automatic (all scoped entries injected, see `P8-4`), not yet user-selectable; frontend form pending
+- [ ] `P6-3` Pentest run detail view — backend serves `GET /api/pentests/{id}` + `/issues`; live agent-graph/transcript view (reusing `RunDetails.tsx`/`live/*`) is frontend-only work, pending
+- [ ] `P6-4` Scheduling — backend CRUD done (`schedules_router` in `pentests.py`: create/list/toggle/delete `PentestSchedule` rows); **no cron trigger loop yet** — rows are stored but nothing currently fires them on schedule; frontend pending
+- [x] `P6-5` Pentest completion → Issues generation + Repository/Domain `last_tested_at` update — implemented and tested end-to-end in `app/jobs.py` (dedup against existing open issues is not yet implemented — every completed scan currently creates fresh `Issue` rows)
 
 ## Phase 7 — Issues
 
-- [ ] `P7-1` `/issues` list: severity summary strip, status tabs + counts, filters, List/Board toggle
-- [ ] `P7-2` Issue detail view (reuse `vulnerability/` components — CVSS, reasoning, source-to-sink trace)
-- [ ] `P7-3` Issue state transitions (fixed/ignored/snoozed/reassign) + audit trail
-- [ ] `P7-4` Cross-linking: issue → pentest/PR review, issue → repo/domain
+- [ ] `P7-1` `/issues` list — backend done (`app/routers/issues.py`: severity counts, status counts, filters); frontend list/tabs pending
+- [ ] `P7-2` Issue detail view — backend serves full finding fields (cvss_breakdown, technical_analysis, poc, code diff fields); frontend detail page (reusing `vulnerability/*`) pending
+- [x] `P7-3` Issue state transitions — `PATCH /api/issues/{id}/status` (validated against `VALID_STATUSES`) + audit log entry; no reassignment field/flow yet (no "assignee" concept in the model)
+- [x] `P7-4` Cross-linking — `Issue` rows carry `pentest_id`/`pr_review_id`/`repository_id`/`domain_id` foreign keys
 
 ## Phase 8 — Knowledge & Context
 
-- [ ] `P8-1` `/knowledge` list + empty state
-- [ ] `P8-2` "Add Knowledge" modal: Type, Description, Scope (global / repo / domain)
-- [ ] `P8-3` Internal Knowledge toggle, search, scope filter
-- [ ] `P8-4` Backend: store entries, feed scoped entries into agent context at run time
+- [ ] `P8-1` `/knowledge` list — backend done (`app/routers/knowledge.py`); frontend pending
+- [ ] `P8-2` "Add Knowledge" modal — backend done (type/description/scope validated); frontend modal pending
+- [ ] `P8-3` Search/scope filter — backend supports `search`/`scope_type` query params; frontend "Internal Knowledge" toggle pending
+- [x] `P8-4` `relevant_entries()` in `knowledge.py` resolves global + repo/domain-scoped entries; wired into `chat.py`'s mock reply. **Not yet wired into `jobs.py`'s scan path** — real-scan findings won't see knowledge context until `_run_real_scan` is filled in (see `P0-7`)
 
 ## Phase 9 — Chat
 
-- [ ] `P9-1` `/chat` landing: prompt input, attachment, "Add repositories", category tabs (Web/Code/Cloud/Recon/Network/Threat Intel/Compliance)
-- [ ] `P9-2` Per-category suggestion cards (data-driven prompt templates)
-- [ ] `P9-3` Chat session view: streaming responses, repo context attachment, inline tool/finding rendering
-- [ ] `P9-4` Backend: conversational orchestration over the `strix` agent engine, session persistence, context injection
+- [ ] `P9-1` `/chat` landing — backend done (`GET /api/chat/suggestions` returns the 7 categories); frontend UI pending
+- [x] `P9-2` Per-category suggestion cards — `SUGGESTIONS` dict in `app/routers/chat.py`, matches the screenshot's Web-tab cards; other categories have placeholder cards, expand as needed
+- [ ] `P9-3` Chat session view — backend done (session/message CRUD, `app/routers/chat.py`); frontend pending. No streaming yet (mock reply returns synchronously, not token-by-token)
+- [ ] `P9-4` Real conversational orchestration over the `strix` engine is **not implemented** — `_mock_agent_reply()` returns a canned response; wiring a real LLM/agent reply requires the same Docker/LLM setup as `P0-7`
 
 ## Phase 10 — Settings: API Access, Billing, Audit Logs
 
-- [ ] `P10-1` `/settings/api-access` Tokens tab: table, New Token modal, type filter
-- [ ] `P10-2` `/settings/api-access` Webhooks tab: endpoint URL, event subscriptions, signing secret
-- [ ] `P10-3` `/settings/billing`: plan display, card management, invoice history
-- [ ] `P10-4` `/settings/audit-logs`: org activity feed (plan-gated)
-- [ ] `P10-5` `/settings/help-support`: contact/docs links
+- [ ] `P10-1` Tokens — backend done (`app/routers/tokens.py`: create returns raw token once, list shows prefix only, revoke); frontend table/modal pending
+- [ ] `P10-2` Webhooks — backend done (`app/routers/webhooks.py`: org-owned outbound webhook config, separate from the inbound `/api/webhooks/github` receiver); frontend pending. Nothing currently *delivers* to these webhook URLs yet (no dispatcher on pentest/issue/PR-review events) — config-only for now
+- [ ] `P10-3` Billing — backend done against `BillingProvider` (mock by default, see `CONFIG.md`); `list_invoices` always returns `[]` in mock mode; frontend pending
+- [ ] `P10-4` Audit logs — backend done (`app/routers/audit.py`, entries recorded from orgs/members/issues/tokens routers); frontend page + plan-gating pending
+- [ ] `P10-5` Help & Support — no backend needed (static links); frontend pending
 
 ## Cross-cutting
 

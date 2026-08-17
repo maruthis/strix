@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from datetime import timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from .. import models, schemas
+from ..deps import current_org, current_user, db_dep, require_admin
+from ..time_utils import utcnow
+
+router = APIRouter(prefix="/api/orgs", tags=["orgs"])
+
+
+class CreateOrgIn(BaseModel):
+    name: str
+
+
+class RenameOrgIn(BaseModel):
+    name: str
+
+
+class DeleteOrgIn(BaseModel):
+    confirm_name: str
+
+
+@router.post("")
+def create_org(
+    body: CreateOrgIn,
+    user: models.User = Depends(current_user),
+    db: Session = Depends(db_dep),
+) -> schemas.OrganizationOut:
+    org = models.Organization(name=body.name.strip() or "Untitled")
+    db.add(org)
+    db.flush()
+    db.add(models.Membership(org_id=org.id, user_id=user.id, role="admin"))
+    db.add(models.PRReviewSettings(org_id=org.id))
+    db.add(
+        models.Subscription(
+            org_id=org.id,
+            plan="pro_trial",
+            status="trialing",
+            trial_ends_at=utcnow() + timedelta(days=7),
+        )
+    )
+    db.commit()
+    _record_audit(db, org.id, user.id, "org.created", org.name)
+    return schemas.OrganizationOut.model_validate(org)
+
+
+@router.get("/current")
+def get_current_org(org: models.Organization = Depends(current_org)) -> schemas.OrganizationOut:
+    return schemas.OrganizationOut.model_validate(org)
+
+
+@router.patch("/current")
+def rename_org(
+    body: RenameOrgIn,
+    org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
+    _admin=Depends(require_admin),
+    db: Session = Depends(db_dep),
+) -> schemas.OrganizationOut:
+    org.name = body.name.strip() or org.name
+    db.commit()
+    _record_audit(db, org.id, user.id, "org.renamed", org.name)
+    return schemas.OrganizationOut.model_validate(org)
+
+
+@router.delete("/current")
+def delete_org(
+    body: DeleteOrgIn,
+    org: models.Organization = Depends(current_org),
+    _admin=Depends(require_admin),
+    db: Session = Depends(db_dep),
+) -> dict:
+    if body.confirm_name != org.name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="name_confirmation_mismatch")
+    db.delete(org)
+    db.commit()
+    return {"ok": True}
+
+
+def _record_audit(db: Session, org_id: str, actor_user_id: str | None, action: str, target: str, extra: dict | None = None) -> None:
+    db.add(models.AuditLogEntry(org_id=org_id, actor_user_id=actor_user_id, action=action, target=target, extra=extra or {}))
+    db.commit()
