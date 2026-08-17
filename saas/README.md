@@ -11,6 +11,19 @@ here, so pulling upstream changes should never produce merge conflicts
 against this work. See [`SYNC.md`](./SYNC.md) for the upstream-sync workflow,
 and [`TASKS.md`](./TASKS.md) for the tracked build task list.
 
+## Running locally
+
+```
+saas/dev.sh
+```
+
+Starts the backend (`:8000`) and frontend (`:5173`) together, seeding demo
+data on first run, and stops both on Ctrl-C. Then open
+**http://localhost:5173** (not `127.0.0.1` — Vite's dev server binds IPv6
+`::1`). See `saas/backend/README.md` and `saas/frontend/README.md` for
+running each half individually, and `saas/CONFIG.md` for environment
+variables (mock vs. real GitHub App/Stripe/scan providers).
+
 ## Rules for keeping this sync-safe
 
 1. Do not edit files under `strix/` (the upstream engine) as part of SaaS
