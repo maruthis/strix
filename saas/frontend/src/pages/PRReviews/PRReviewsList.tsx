@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitPullRequest, Settings as SettingsIcon, X } from "lucide-react";
+import { GitPullRequest, Github, Plus, Settings as SettingsIcon, X } from "lucide-react";
 import { api } from "../../api/client";
 import type { PRReview, PRReviewsResponse, PRReviewSettings, PRReviewStatus, Repository, Severity } from "../../api/types";
 import { EmptyState } from "../../components/shared/EmptyState";
 import { Modal } from "../../components/shared/Modal";
+import { AddRepositoryModal } from "../../components/shared/AddRepositoryModal";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { Tabs, FilterBar } from "../../components/shared/FilterBar";
-import { Button, Field, Select, TextInput, Toggle } from "../../components/shared/Form";
+import { Button, Field, TextInput, Toggle } from "../../components/shared/Form";
 import { ViewToggle, type ViewMode } from "../../components/shared/ViewToggle";
 import { Board } from "../../components/shared/Board";
 import { toast } from "../../components/shared/Toast";
@@ -35,6 +36,7 @@ export default function PRReviewsList() {
   const [view, setView] = useState<ViewMode>("list");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
 
   // Board mode always shows every status grouped into columns, so it ignores
   // the status tab (which only applies to list mode).
@@ -55,6 +57,9 @@ export default function PRReviewsList() {
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => setSettingsOpen(true)}>
             <SettingsIcon size={15} /> Settings
+          </Button>
+          <Button variant="secondary" onClick={() => setConnectOpen(true)}>
+            <Plus size={15} /> Connect Repository
           </Button>
           <Button onClick={() => setReviewOpen(true)}>Review a Pull Request</Button>
         </div>
@@ -91,6 +96,7 @@ export default function PRReviewsList() {
 
       <PRReviewSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <TriggerReviewModal open={reviewOpen} onClose={() => setReviewOpen(false)} />
+      <AddRepositoryModal open={connectOpen} onClose={() => setConnectOpen(false)} />
     </div>
   );
 }
@@ -287,21 +293,75 @@ function TagListField({
 function TriggerReviewModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const queryClient = useQueryClient();
   const { data: repos } = useQuery({ queryKey: ["repositories"], queryFn: () => api.get<Repository[]>("/api/repositories"), enabled: open });
-  const [repositoryId, setRepositoryId] = useState("");
+  const [repoSearch, setRepoSearch] = useState("");
+  const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
   const [prNumber, setPrNumber] = useState("");
   const [title, setTitle] = useState("");
 
+  function reset() {
+    setRepoSearch("");
+    setSelectedRepo(null);
+    setPrNumber("");
+    setTitle("");
+  }
+
   const trigger = useMutation({
-    mutationFn: () => api.post<PRReview>("/api/pr-reviews", { repository_id: repositoryId, pr_number: Number(prNumber), title }),
+    mutationFn: () => api.post<PRReview>("/api/pr-reviews", { repository_id: selectedRepo!.id, pr_number: Number(prNumber), title }),
     onSuccess: (review) => {
       queryClient.invalidateQueries({ queryKey: ["pr-reviews"] });
       onClose();
+      reset();
       toast.success(`Review ${review.status === "passed" ? "passed" : `found ${review.findings_count} finding(s)`}`);
     },
   });
 
+  const filteredRepos = (repos ?? []).filter((r) => r.full_name.toLowerCase().includes(repoSearch.toLowerCase()));
+
+  if (!selectedRepo) {
+    return (
+      <Modal
+        open={open}
+        onClose={() => {
+          onClose();
+          reset();
+        }}
+        title="Review a pull request"
+        description="Select a connected repository, then choose an open pull request or enter its number."
+      >
+        <TextInput
+          autoFocus
+          value={repoSearch}
+          onChange={(e) => setRepoSearch(e.target.value)}
+          placeholder="Search repositories"
+          className="mb-3"
+        />
+        <div className="max-h-72 space-y-1.5 overflow-y-auto">
+          {filteredRepos.length === 0 && <p className="py-6 text-center text-sm text-[#666]">No connected repositories found.</p>}
+          {filteredRepos.map((repo) => (
+            <button
+              key={repo.id}
+              type="button"
+              onClick={() => setSelectedRepo(repo)}
+              className="flex w-full items-center gap-2 rounded-lg border border-[#222] px-3 py-2.5 text-left text-sm text-white hover:bg-[rgba(255,255,255,0.04)]"
+            >
+              <Github size={15} className="text-[#888]" />
+              {repo.full_name}
+            </button>
+          ))}
+        </div>
+      </Modal>
+    );
+  }
+
   return (
-    <Modal open={open} onClose={onClose} title="Review a Pull Request">
+    <Modal
+      open={open}
+      onClose={() => {
+        onClose();
+        reset();
+      }}
+      title="Review a pull request"
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -309,12 +369,15 @@ function TriggerReviewModal({ open, onClose }: { open: boolean; onClose: () => v
         }}
       >
         <Field label="Repository">
-          <Select
-            value={repositoryId}
-            onChange={setRepositoryId}
-            options={[{ value: "", label: "Select a repository…" }, ...(repos ?? []).map((r) => ({ value: r.id, label: r.full_name }))]}
-            className="w-full"
-          />
+          <button
+            type="button"
+            onClick={() => setSelectedRepo(null)}
+            className="flex w-full items-center gap-2 rounded-lg border border-[#222] px-3 py-2 text-left text-sm text-white hover:bg-[rgba(255,255,255,0.04)]"
+          >
+            <Github size={15} className="text-[#888]" />
+            {selectedRepo.full_name}
+            <span className="ml-auto text-xs text-[#666]">Change</span>
+          </button>
         </Field>
         <Field label="PR number">
           <TextInput type="number" required value={prNumber} onChange={(e) => setPrNumber(e.target.value)} placeholder="42" />
@@ -322,7 +385,7 @@ function TriggerReviewModal({ open, onClose }: { open: boolean; onClose: () => v
         <Field label="PR title">
           <TextInput required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Add wallet withdraw endpoint" />
         </Field>
-        <Button type="submit" className="w-full" disabled={!repositoryId || trigger.isPending}>
+        <Button type="submit" className="w-full" disabled={trigger.isPending}>
           {trigger.isPending ? "Reviewing…" : "Run review"}
         </Button>
       </form>

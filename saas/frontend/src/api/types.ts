@@ -223,3 +223,13 @@ export interface Invitation {
   role: string;
   created_at: string;
 }
+
+export interface Integration {
+  provider: string;
+  category: "code" | "communication" | "issue_tracking";
+  label: string;
+  coming_soon: boolean;
+  status: "connected" | "not_connected";
+  account_label: string | null;
+  connected_at: string | null;
+}

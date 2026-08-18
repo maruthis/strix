@@ -14,6 +14,7 @@ import RepositoriesList from "./pages/Repositories/RepositoriesList";
 import DomainsList from "./pages/Domains/DomainsList";
 import DomainDetail from "./pages/Domains/DomainDetail";
 import KnowledgeList from "./pages/Knowledge/KnowledgeList";
+import IntegrationsList from "./pages/Integrations/IntegrationsList";
 import Chat from "./pages/Chat/Chat";
 import { SettingsLayout } from "./pages/Settings/SettingsLayout";
 import GeneralSettings from "./pages/Settings/GeneralSettings";
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="/domains" element={<DomainsList />} />
         <Route path="/domains/:id" element={<DomainDetail />} />
         <Route path="/knowledge" element={<KnowledgeList />} />
+        <Route path="/integrations" element={<IntegrationsList />} />
         <Route path="/chat" element={<Chat />} />
 
         <Route path="/settings" element={<SettingsLayout />}>

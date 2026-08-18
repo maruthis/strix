@@ -4,6 +4,7 @@ from . import (
     billing,
     chat,
     domains,
+    integrations,
     issues,
     knowledge,
     llm_settings,
@@ -34,4 +35,5 @@ ALL_ROUTERS = [
     billing.router,
     audit.router,
     llm_settings.router,
+    integrations.router,
 ]

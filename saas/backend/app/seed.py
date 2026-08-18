@@ -56,6 +56,7 @@ def seed() -> None:
                 auto_review_enabled=True,
             )
         )
+        db.add(models.Integration(org_id=org.id, provider="github", account_label="maruthis"))
         db.commit()
         print(f"Seeded org {org.id!r} ({DEMO_ORG_NAME}) with user {user.email} and repo {DEMO_REPO}.")
     finally:

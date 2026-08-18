@@ -32,12 +32,13 @@ describe("Sidebar", () => {
     expect(screen.getByText("a@example.com")).toBeInTheDocument();
   });
 
-  it("renders every nav item, locking Supply Chain/Networks/Integrations", () => {
+  it("renders every nav item, locking Supply Chain/Networks", () => {
     renderWithProviders(<Sidebar />);
     expect(screen.getByText("Dashboard")).toBeInTheDocument();
     expect(screen.getByText("Supply Chain")).toBeInTheDocument();
     expect(screen.getByText("Networks")).toBeInTheDocument();
     expect(screen.getByText("Integrations")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Integrations/ })).toBeInTheDocument();
   });
 
   it("opens the org switcher and switches org on click", async () => {

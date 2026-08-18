@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -302,6 +302,17 @@ class Webhook(TimestampMixin, Base):
     events: Mapped[list] = mapped_column(JSON, default=list)
     secret: Mapped[str] = mapped_column(String, default=lambda: uuid.uuid4().hex)
     status: Mapped[str] = mapped_column(String, default="active")
+
+
+class Integration(TimestampMixin, Base):
+    __tablename__ = "integrations"
+    __table_args__ = (UniqueConstraint("org_id", "provider", name="uq_integration_org_provider"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    provider: Mapped[str] = mapped_column(String)  # github | gitlab | bitbucket | slack | jira | linear
+    account_label: Mapped[str] = mapped_column(String)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 # --------------------------------------------------------------------------

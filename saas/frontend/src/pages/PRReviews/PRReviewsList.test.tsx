@@ -61,8 +61,7 @@ describe("PRReviewsList", () => {
   });
 
   it("debounces search input instead of firing a request per keystroke", async () => {
-    const fetchMock = vi.fn(async () => jsonRes({ items: [REVIEW], counts: { all: 1 } }));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = mockFetchImpl(async () => jsonRes({ items: [REVIEW], counts: { all: 1 } }));
     renderWithProviders(<PRReviewsList />);
     await screen.findByText(/Add withdraw endpoint/);
     const callsBeforeTyping = fetchMock.mock.calls.length;
@@ -74,7 +73,7 @@ describe("PRReviewsList", () => {
     // Once typing settles, exactly one debounced request goes out with the
     // full search term.
     await waitFor(() => {
-      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("search=widgets")).length).toBe(1);
+      expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes("search=widgets")).length).toBe(1);
     });
   });
 
@@ -168,9 +167,10 @@ describe("PRReviewsList", () => {
       });
       renderWithProviders(<PRReviewsList />);
       await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
-      await screen.findByText("Repository");
+      await screen.findByText("Select a connected repository, then choose an open pull request or enter its number.");
 
-      await userEvent.selectOptions(screen.getByDisplayValue("Select a repository…"), "acme/widgets");
+      await userEvent.click(await screen.findByText("acme/widgets"));
+      await screen.findByText("PR number");
       await userEvent.type(screen.getByPlaceholderText("42"), "7");
       await userEvent.type(screen.getByPlaceholderText("Add wallet withdraw endpoint"), "Some PR");
       await userEvent.click(screen.getByRole("button", { name: "Run review" }));
@@ -184,9 +184,9 @@ describe("PRReviewsList", () => {
       });
       renderWithProviders(<PRReviewsList />);
       await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
-      await screen.findByText("Repository");
+      await userEvent.click(await screen.findByText("acme/widgets"));
+      await screen.findByText("PR number");
 
-      await userEvent.selectOptions(screen.getByDisplayValue("Select a repository…"), "acme/widgets");
       await userEvent.type(screen.getByPlaceholderText("42"), "8");
       await userEvent.type(screen.getByPlaceholderText("Add wallet withdraw endpoint"), "Another PR");
 
@@ -195,15 +195,77 @@ describe("PRReviewsList", () => {
       await userEvent.click(submit);
     });
 
-    it("disables submit until a repository is selected", async () => {
+    it("filters the repository list by search, and lets you change the selection", async () => {
+      mockFetchImpl(async (url) => {
+        if (url.endsWith("/api/repositories")) {
+          return jsonRes([
+            { id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 },
+            { id: "r2", provider: "github", full_name: "acme/gadgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 },
+          ]);
+        }
+        return jsonRes({ items: [], counts: { all: 0 } });
+      });
+      renderWithProviders(<PRReviewsList />);
+      await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
+      await screen.findByText("acme/gadgets");
+
+      await userEvent.type(screen.getByPlaceholderText("Search repositories"), "wid");
+      expect(screen.getByText("acme/widgets")).toBeInTheDocument();
+      expect(screen.queryByText("acme/gadgets")).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByText("acme/widgets"));
+      await screen.findByText("Change");
+      await userEvent.click(screen.getByText("Change"));
+      await screen.findByPlaceholderText("Search repositories");
+    });
+
+    it("shows an empty state when there are no connected repositories to review", async () => {
       mockFetchImpl(async (url) => {
         if (url.endsWith("/api/repositories")) return jsonRes([]);
         return jsonRes({ items: [], counts: { all: 0 } });
       });
       renderWithProviders(<PRReviewsList />);
       await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
-      await screen.findByText("Repository");
-      expect(screen.getByRole("button", { name: "Run review" })).toBeDisabled();
+      await screen.findByText("No connected repositories found.");
+    });
+
+    it("resets the picker and closes on X from both steps", async () => {
+      mockFetchImpl(async (url) => {
+        if (url.endsWith("/api/repositories")) {
+          return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
+        }
+        return jsonRes({ items: [], counts: { all: 0 } });
+      });
+      renderWithProviders(<PRReviewsList />);
+      await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
+      await screen.findByText("acme/widgets");
+
+      // Closing from the repo-picker step.
+      const modal = screen.getByText("Review a pull request").closest("div")!.parentElement!;
+      await userEvent.click(modal.querySelector("button")!);
+      expect(screen.queryByText("Review a pull request")).not.toBeInTheDocument();
+
+      // Reopen and close from the details step.
+      await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
+      await userEvent.click(await screen.findByText("acme/widgets"));
+      await screen.findByText("PR number");
+      const modal2 = screen.getByText("Review a pull request").closest("div")!.parentElement!;
+      await userEvent.click(modal2.querySelector("button")!);
+      expect(screen.queryByText("Review a pull request")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("connect repository modal", () => {
+    it("opens from the Connect Repository button and adds a repo", async () => {
+      mockFetchImpl(async (url) => {
+        if (url.endsWith("/api/repositories")) return jsonRes([]);
+        if (url.includes("/installable")) return jsonRes([{ full_name: "acme/new-repo", default_branch: "main", private: false }]);
+        return jsonRes({ items: [], counts: { all: 0 } });
+      });
+      renderWithProviders(<PRReviewsList />);
+      await userEvent.click(screen.getByRole("button", { name: /Connect Repository/ }));
+      await screen.findByText("acme/new-repo");
+      await userEvent.click(screen.getByRole("button", { name: "Add" }));
     });
   });
 });

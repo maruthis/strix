@@ -34,7 +34,7 @@ const NAV2 = [
   { to: "/domains", label: "Domains", icon: Globe },
   { to: "/networks", label: "Networks", icon: Share2, locked: true },
   { to: "/knowledge", label: "Knowledge", icon: Database },
-  { to: "/integrations", label: "Integrations", icon: Puzzle, locked: true },
+  { to: "/integrations", label: "Integrations", icon: Puzzle },
 ];
 
 function NavItem({ to, label, icon: Icon, locked }: { to: string; label: string; icon: typeof LayoutGrid; locked?: boolean }) {
