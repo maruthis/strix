@@ -7,9 +7,12 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..deps import current_org, current_user, db_dep, require_admin
-from ..providers import get_github_provider
+from ..providers.github import MockGitHubProvider
+from .integrations import list_live_repos
 from .orgs import _record_audit
 from .pentests import create_and_enqueue_pentest
+
+SUPPORTED_PROVIDERS = {"github", "gitlab"}
 
 router = APIRouter(prefix="/api/repositories", tags=["repositories"])
 
@@ -51,25 +54,29 @@ def list_repositories(org: models.Organization = Depends(current_org), db: Sessi
 
 
 @router.get("/installable")
-def list_installable(org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> list[dict]:
-    provider = get_github_provider()
-    already_added = {r.full_name for r in db.query(models.Repository).filter_by(org_id=org.id).all()}
-    try:
-        catalog = provider.installable_repositories()
-    except NotImplementedError as exc:
-        # RealGitHubProvider's methods are scaffolded but not implemented
-        # yet (see providers/github.py) — surface a clear, actionable error
-        # instead of an unhandled 500 once a real GitHub App is configured.
-        raise HTTPException(
-            status.HTTP_501_NOT_IMPLEMENTED,
-            detail="github_app_not_fully_configured",
-        ) from exc
+def list_installable(
+    provider: str = "github",
+    org: models.Organization = Depends(current_org),
+    db: Session = Depends(db_dep),
+) -> list[dict]:
+    if provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="unsupported_provider")
+
+    # A connected integration with a real credential lists real repos;
+    # otherwise fall back to the mock catalog (github only — gitlab has
+    # never had a mock, so an unconnected gitlab just shows nothing to add).
+    catalog = list_live_repos(db, org.id, provider)
+    if catalog is None:
+        catalog = MockGitHubProvider().installable_repositories() if provider == "github" else []
+
+    already_added = {r.full_name for r in db.query(models.Repository).filter_by(org_id=org.id, provider=provider).all()}
     return [repo for repo in catalog if repo["full_name"] not in already_added]
 
 
 class AddRepositoryIn(BaseModel):
     full_name: str
     default_branch: str = "main"
+    provider: str = "github"
 
 
 @router.post("")
@@ -79,10 +86,12 @@ def add_repository(
     user: models.User = Depends(current_user),
     db: Session = Depends(db_dep),
 ) -> dict:
-    existing = db.query(models.Repository).filter_by(org_id=org.id, full_name=body.full_name).first()
+    if body.provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="unsupported_provider")
+    existing = db.query(models.Repository).filter_by(org_id=org.id, full_name=body.full_name, provider=body.provider).first()
     if existing:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="already_added")
-    repo = models.Repository(org_id=org.id, full_name=body.full_name, default_branch=body.default_branch)
+    repo = models.Repository(org_id=org.id, full_name=body.full_name, default_branch=body.default_branch, provider=body.provider)
     db.add(repo)
     db.commit()
     _record_audit(db, org.id, user.id, "repository.added", repo.full_name)

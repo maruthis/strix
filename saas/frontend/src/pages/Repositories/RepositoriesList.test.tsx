@@ -101,6 +101,14 @@ describe("RepositoriesList", () => {
     renderWithProviders(<RepositoriesList />);
     await screen.findByText("acme/widgets");
     await userEvent.click(screen.getByRole("button", { name: /Add Repository/ }));
-    await screen.findByText("No more repositories to add.");
+    await screen.findByText(/No more repositories to add/);
+  });
+
+  it("shows the GitLab icon for a gitlab repository row", async () => {
+    mockFetchJson({ body: [{ ...REPO, provider: "gitlab", full_name: "acme-group/widgets" }] });
+    renderWithProviders(<RepositoriesList />);
+    await screen.findByText("acme-group/widgets");
+    expect(document.querySelector(".lucide-gitlab")).toBeInTheDocument();
+    expect(document.querySelector(".lucide-github")).not.toBeInTheDocument();
   });
 });

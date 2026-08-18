@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     session_secret: str = "dev-insecure-secret-change-me"
     frontend_origin: str = "http://localhost:5173"
 
+    # Encrypts real integration credentials (GitHub/GitLab personal access
+    # tokens) at rest — see app/crypto.py. Any string works as input (it's
+    # hashed into a valid Fernet key), but change this for any non-local
+    # deployment, same as session_secret.
+    credentials_encryption_key: str = "dev-insecure-encryption-key-change-me"
+
     enable_real_scan: bool = False
     mock_scan_min_seconds: float = 4.0
     mock_scan_max_seconds: float = 8.0

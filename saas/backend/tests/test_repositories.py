@@ -119,13 +119,68 @@ def test_update_and_remove_repository_require_admin(auth_client):
     assert client.post(f"/api/repositories/{repo['id']}/scan").status_code == 200
 
 
-def test_list_installable_returns_501_when_real_provider_not_implemented(auth_client, monkeypatch):
-    from app.settings import settings
+def test_installable_gitlab_is_empty_when_not_connected(auth_client):
+    client, _org = auth_client
+    res = client.get("/api/repositories/installable?provider=gitlab")
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_installable_rejects_unsupported_provider(auth_client):
+    client, _org = auth_client
+    res = client.get("/api/repositories/installable?provider=bitbucket")
+    assert res.status_code == 400
+    assert res.json()["detail"] == "unsupported_provider"
+
+    add = client.post("/api/repositories", json={"full_name": "acme/x", "provider": "bitbucket"})
+    assert add.status_code == 400
+    assert add.json()["detail"] == "unsupported_provider"
+
+
+def test_installable_lists_real_repos_once_github_is_connected(auth_client, monkeypatch):
+    from app.providers import git_hosting
 
     client, _org = auth_client
-    monkeypatch.setattr(settings, "github_app_id", "fake-app-id")
-    monkeypatch.setattr(settings, "github_app_private_key", "fake-key")
+    monkeypatch.setattr(git_hosting, "verify_github", lambda *, token, base_url: "octocat")
+    client.post("/api/integrations/github/connect", json={"account_label": "octocat", "credential": "ghp_real"})
 
+    monkeypatch.setattr(
+        git_hosting,
+        "list_repos_github",
+        lambda *, token, base_url: [{"full_name": "octocat/real-repo", "default_branch": "main", "private": False}],
+    )
     res = client.get("/api/repositories/installable")
-    assert res.status_code == 501
-    assert res.json()["detail"] == "github_app_not_fully_configured"
+    assert res.status_code == 200
+    assert res.json() == [{"full_name": "octocat/real-repo", "default_branch": "main", "private": False}]
+
+    # Once added, it drops out of the installable list — scoped by provider,
+    # so a same-named gitlab repo wouldn't be excluded by this add.
+    client.post("/api/repositories", json={"full_name": "octocat/real-repo", "provider": "github"})
+    assert client.get("/api/repositories/installable").json() == []
+
+
+def test_installable_surfaces_revoked_credential_as_401(auth_client, monkeypatch):
+    from app.providers import git_hosting
+
+    client, _org = auth_client
+    monkeypatch.setattr(git_hosting, "verify_github", lambda *, token, base_url: "octocat")
+    client.post("/api/integrations/github/connect", json={"account_label": "octocat", "credential": "ghp_real"})
+
+    def fake_list(*, token, base_url):
+        raise git_hosting.CredentialError("invalid_credentials")
+
+    monkeypatch.setattr(git_hosting, "list_repos_github", fake_list)
+    res = client.get("/api/repositories/installable")
+    assert res.status_code == 401
+    assert res.json()["detail"] == "invalid_credentials"
+
+
+def test_add_gitlab_repository(auth_client):
+    client, _org = auth_client
+    res = client.post("/api/repositories", json={"full_name": "acme-group/widgets", "provider": "gitlab"})
+    assert res.status_code == 200
+    assert res.json()["provider"] == "gitlab"
+
+    # Same full_name under a different provider is not a conflict.
+    other = client.post("/api/repositories", json={"full_name": "acme-group/widgets", "provider": "github"})
+    assert other.status_code == 200

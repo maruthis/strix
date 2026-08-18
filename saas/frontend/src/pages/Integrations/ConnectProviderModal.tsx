@@ -15,6 +15,11 @@ const ACCOUNT_LABEL_HINT: Record<string, string> = {
   linear: "Linear workspace",
 };
 
+const BASE_URL_HINT: Record<string, string> = {
+  github: "https://github.example.com (leave blank for github.com, or GitHub Enterprise Server)",
+  gitlab: "https://gitlab.example.com (leave blank for gitlab.com)",
+};
+
 export function ConnectProviderModal({
   integration,
   onClose,
@@ -25,10 +30,12 @@ export function ConnectProviderModal({
   const queryClient = useQueryClient();
   const [accountLabel, setAccountLabel] = useState("");
   const [credential, setCredential] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
 
   function reset() {
     setAccountLabel("");
     setCredential("");
+    setBaseUrl("");
   }
 
   const connect = useMutation({
@@ -36,6 +43,7 @@ export function ConnectProviderModal({
       api.post<Integration>(`/api/integrations/${integration!.provider}/connect`, {
         account_label: accountLabel,
         credential: credential || undefined,
+        base_url: baseUrl || undefined,
       }),
     onSuccess: (updated) => {
       queryClient.setQueryData<Integration[]>(["integrations"], (prev) => prev?.map((i) => (i.provider === updated.provider ? updated : i)));
@@ -47,6 +55,8 @@ export function ConnectProviderModal({
 
   if (!integration) return null;
 
+  const credentialRequired = integration.live;
+
   return (
     <Modal
       open={!!integration}
@@ -55,7 +65,11 @@ export function ConnectProviderModal({
         onClose();
       }}
       title={`Connect ${integration.label}`}
-      description={`Provide the account and credentials Strix should use to connect to ${integration.label}.`}
+      description={
+        integration.live
+          ? `Strix verifies this token against ${integration.label} right away — nothing is saved unless it works.`
+          : `Provide the account and credentials Strix should use to connect to ${integration.label}.`
+      }
     >
       <form
         onSubmit={(e) => {
@@ -72,18 +86,30 @@ export function ConnectProviderModal({
             placeholder="e.g. acme-corp"
           />
         </Field>
-        <Field label="Personal access token (optional)">
+        <Field label={credentialRequired ? "Personal access token" : "Personal access token (optional)"}>
           <TextInput
             type="password"
+            required={credentialRequired}
             value={credential}
             onChange={(e) => setCredential(e.target.value)}
             placeholder="Paste a token to authenticate as this account"
           />
         </Field>
+        {integration.live && (
+          <Field label="Instance URL (optional)">
+            <TextInput value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={BASE_URL_HINT[integration.provider]} />
+          </Field>
+        )}
         <p className="mb-4 text-xs text-[#666]">
-          Tokens are never stored in full — only the last 4 characters are kept, for display purposes.
+          {integration.live
+            ? "Tokens are encrypted at rest, never stored in full plaintext — only the last 4 characters are kept for display."
+            : "Tokens are never stored in full — only the last 4 characters are kept, for display purposes."}
         </p>
-        <Button type="submit" className="w-full" disabled={!accountLabel.trim() || connect.isPending}>
+        <Button
+          type="submit"
+          className="w-full"
+          disabled={!accountLabel.trim() || (credentialRequired && !credential.trim()) || connect.isPending}
+        >
           {connect.isPending ? "Connecting…" : `Connect ${integration.label}`}
         </Button>
       </form>

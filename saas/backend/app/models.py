@@ -312,7 +312,9 @@ class Integration(TimestampMixin, Base):
     org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
     provider: Mapped[str] = mapped_column(String)  # github | gitlab | bitbucket | slack | jira | linear
     account_label: Mapped[str] = mapped_column(String)
-    credential_last4: Mapped[str | None] = mapped_column(String, nullable=True)
+    base_url: Mapped[str | None] = mapped_column(String, nullable=True)  # self-hosted GitLab / GitHub Enterprise
+    credential_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)  # app/crypto.py; real API calls decrypt this
+    credential_last4: Mapped[str | None] = mapped_column(String, nullable=True)  # display only
     connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

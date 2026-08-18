@@ -11,30 +11,60 @@ locally with **zero configuration** — every setting below is optional.
 | `SAAS_SESSION_SECRET` | insecure dev value | Change this for any non-local deployment. |
 | `SAAS_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS allow-origin for the frontend dev server / deployed frontend. |
 | `SAAS_ENABLE_REAL_SCAN` | `false` | When true, pentests invoke the real `strix.core.runner.run_strix_scan` engine (Docker + LLM credentials required) instead of the mock scanner. Falls back to mock on any failure. |
-| `SAAS_GITHUB_APP_ID`, `SAAS_GITHUB_APP_PRIVATE_KEY`, `SAAS_GITHUB_WEBHOOK_SECRET` | unset | Set all three to activate `RealGitHubProvider` (see `app/providers/github.py`) instead of the mock. Requires registering a GitHub App. |
 | `SAAS_STRIPE_SECRET_KEY`, `SAAS_STRIPE_WEBHOOK_SECRET` | unset | Set to activate `RealStripeProvider` (see `app/providers/billing.py`) instead of the mock. Requires a Stripe account. |
+| `SAAS_CREDENTIALS_ENCRYPTION_KEY` | insecure dev value | Encrypts GitHub/GitLab personal access tokens at rest (see `app/crypto.py`). Any string works (it's hashed into a valid Fernet key) — change it for any non-local deployment, same as `SAAS_SESSION_SECRET`. |
 
-## What's mocked by default, and why
+## GitHub / GitLab: real, per-org, token-based (not a GitHub App)
 
-Three things need credentials only you can provide, so they run against a
+Unlike the rest of this doc's "mock until you register a deployment-wide
+app" pattern, GitHub and GitLab integrations are **real by default, per
+org** — no app registration, no OAuth consent screen, no deployment-wide
+credentials needed. From **Settings → Integrations**, an org admin
+connects by supplying:
+
+- **Account/username or group** — whatever the token belongs to
+- **Personal/Project Access Token** — required for these two providers
+- **Instance URL** (optional) — self-hosted GitLab, or a GitHub Enterprise
+  Server, instead of gitlab.com/github.com
+
+On Connect, the token is verified live (`GET /user`) against the real
+API before anything is saved — a bad token or unreachable URL fails
+immediately with `invalid_credentials` (401) or `provider_unreachable`
+(502), not silently on the next scan. The full token is encrypted at rest
+(`SAAS_CREDENTIALS_ENCRYPTION_KEY` above) and decrypted only when needed to
+make a real API call; only its last 4 characters are additionally kept in
+plaintext for display. See `app/providers/git_hosting.py`.
+
+**Scope, deliberately narrow for now:** connecting and listing real repos
+(`GET /user/repos` / `GET /projects?membership=true`) — the "Add
+Repository" picker on both Repositories and PR Reviews shows real repos
+once connected. Posting real check-runs/PR comments and receiving webhooks
+are **not** wired up yet; PR review results still post through the mock
+GitHub App path (`app/providers/github.py`'s `get_github_provider()`,
+unrelated to the per-org token above — see that file's docstring for why
+they're intentionally two separate things). An org that hasn't connected
+GitHub falls back to a fixed mock repo catalog (so the demo/seed org keeps
+working with zero setup); an unconnected GitLab shows nothing to add,
+since GitLab never had a mock catalog.
+
+## What else is mocked by default, and why
+
+Two things need credentials only you can provide, so they run against a
 mock provider until configured:
 
-1. **GitHub App install/OAuth + webhooks** — `MockGitHubProvider` returns a
-   fixed catalog of "installable" repos and fakes check-runs/comments.
-   Real version needs a registered GitHub App (App ID, private key,
-   webhook secret from https://github.com/settings/apps).
-2. **Stripe billing** — `MockBillingProvider` flips `card_added` locally
+1. **Stripe billing** — `MockBillingProvider` flips `card_added` locally
    with no payment processor involved. Real version needs a Stripe account
    and product/price IDs.
-3. **Outbound email for OTP codes / invitations** — dev mode returns the
+2. **Outbound email for OTP codes / invitations** — dev mode returns the
    code/token directly in the API response (see `SAAS_DEV_MODE`). Wiring a
    real provider (Postmark/SES/etc.) means adding a `send_email()` call in
    `app/routers/auth.py`'s `otp_start` and `app/routers/members.py`'s
    `create_invitation`, then setting `SAAS_DEV_MODE=false`.
 
 Everything else (orgs, repos, domains, pentests, issues, PR review
-settings, knowledge base, chat, tokens, audit log) is real — backed by the
-actual database, no mocking involved.
+settings, knowledge base, chat, tokens, audit log, and now GitHub/GitLab
+connect+list above) is real — backed by the actual database and, for
+GitHub/GitLab, real outbound API calls.
 
 ## Per-org LLM configuration
 
@@ -63,8 +93,10 @@ also isolating each scan (e.g. one subprocess/container per scan) so each
 gets its own process-global state.
 
 **Two things flagged for hardening, not yet done:**
-- `OrgLlmSettings.api_key` is stored in plaintext in the database. Encrypt
-  at rest (KMS-backed field, `cryptography`'s Fernet, etc.) before any
+- `OrgLlmSettings.api_key` is stored in plaintext in the database — unlike
+  `Integration.credential_encrypted` (GitHub/GitLab tokens, above), which
+  already uses the same `cryptography` Fernet approach this item asks for.
+  Wire `OrgLlmSettings.api_key` through `app/crypto.py` too before any
   shared or production deployment.
 - `ApiToken.expires_at` is stored and shown in the UI but **not enforced**
   — there's no bearer-token authentication path in this scaffold at all

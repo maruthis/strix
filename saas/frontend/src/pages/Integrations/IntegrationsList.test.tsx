@@ -19,9 +19,11 @@ const CATALOG = [
     category: "code",
     label: "GitHub",
     coming_soon: false,
+    live: true,
     configure_url: "https://github.com/settings/installations",
     status: "connected",
     account_label: "maruthis",
+    base_url: null,
     credential_last4: null,
     connected_at: "2026-08-01T00:00:00Z",
   },
@@ -30,17 +32,19 @@ const CATALOG = [
     category: "code",
     label: "GitLab",
     coming_soon: false,
+    live: true,
     configure_url: "https://gitlab.com/-/user_settings/applications",
     status: "not_connected",
     account_label: null,
+    base_url: null,
     credential_last4: null,
     connected_at: null,
   },
-  { provider: "bitbucket", category: "code", label: "Bitbucket", coming_soon: false, configure_url: null, status: "not_connected", account_label: null, credential_last4: null, connected_at: null },
-  { provider: "slack", category: "communication", label: "Slack", coming_soon: false, configure_url: null, status: "not_connected", account_label: null, credential_last4: null, connected_at: null },
-  { provider: "msteams", category: "communication", label: "Microsoft Teams", coming_soon: true, configure_url: null, status: "not_connected", account_label: null, credential_last4: null, connected_at: null },
-  { provider: "jira", category: "issue_tracking", label: "Jira", coming_soon: false, configure_url: null, status: "not_connected", account_label: null, credential_last4: null, connected_at: null },
-  { provider: "linear", category: "issue_tracking", label: "Linear", coming_soon: false, configure_url: null, status: "not_connected", account_label: null, credential_last4: null, connected_at: null },
+  { provider: "bitbucket", category: "code", label: "Bitbucket", coming_soon: false, live: false, configure_url: null, status: "not_connected", account_label: null, base_url: null, credential_last4: null, connected_at: null },
+  { provider: "slack", category: "communication", label: "Slack", coming_soon: false, live: false, configure_url: null, status: "not_connected", account_label: null, base_url: null, credential_last4: null, connected_at: null },
+  { provider: "msteams", category: "communication", label: "Microsoft Teams", coming_soon: true, live: false, configure_url: null, status: "not_connected", account_label: null, base_url: null, credential_last4: null, connected_at: null },
+  { provider: "jira", category: "issue_tracking", label: "Jira", coming_soon: false, live: false, configure_url: null, status: "not_connected", account_label: null, base_url: null, credential_last4: null, connected_at: null },
+  { provider: "linear", category: "issue_tracking", label: "Linear", coming_soon: false, live: false, configure_url: null, status: "not_connected", account_label: null, base_url: null, credential_last4: null, connected_at: null },
 ];
 
 describe("IntegrationsList", () => {
@@ -93,14 +97,22 @@ describe("IntegrationsList", () => {
     const submit = screen.getByRole("button", { name: "Connect GitLab" });
     expect(submit).toBeDisabled();
 
+    // GitLab is a live provider: account name alone isn't enough, a
+    // credential is required too (unlike the mock-only providers).
     await userEvent.type(screen.getByPlaceholderText("e.g. acme-corp"), "acme");
+    expect(submit).toBeDisabled();
     await userEvent.type(screen.getByPlaceholderText(/Paste a token/), "glpat-abcd1234");
     expect(submit).not.toBeDisabled();
+
+    // Live providers also expose an instance-URL field for self-hosting.
+    await userEvent.type(screen.getByPlaceholderText(/gitlab.example.com/), "https://gitlab.acme.internal");
     await userEvent.click(submit);
 
     await screen.findByText("acme");
     expect(screen.getByText(/token ending in 1234/)).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/api/integrations/gitlab/connect", expect.objectContaining({ method: "POST" }));
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).includes("gitlab/connect") && (c[1] as RequestInit)?.method === "POST")!;
+    const sentBody = JSON.parse((call[1] as RequestInit).body as string);
+    expect(sentBody).toEqual({ account_label: "acme", credential: "glpat-abcd1234", base_url: "https://gitlab.acme.internal" });
     expect(screen.queryByRole("heading", { name: "Connect GitLab" })).not.toBeInTheDocument();
   });
 
@@ -119,8 +131,14 @@ describe("IntegrationsList", () => {
     await userEvent.click(connectButtons[1]); // bitbucket has no dedicated hint, exercising the fallback label too
 
     await screen.findByRole("heading", { name: "Connect Bitbucket" });
+    // Non-live providers don't get the self-hosted instance-URL field.
+    expect(screen.queryByText("Instance URL (optional)")).not.toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: "Connect Bitbucket" });
     await userEvent.type(screen.getByPlaceholderText("e.g. acme-corp"), "acme-workspace");
-    await userEvent.click(screen.getByRole("button", { name: "Connect Bitbucket" }));
+    // Credential is optional for a non-live provider — submit is enabled
+    // with just the account name.
+    expect(submit).not.toBeDisabled();
+    await userEvent.click(submit);
 
     await screen.findByText("acme-workspace");
     const call = fetchMock.mock.calls.find((c) => String(c[0]).includes("bitbucket/connect"))!;
@@ -139,6 +157,7 @@ describe("IntegrationsList", () => {
     await screen.findByText("GitLab");
     await userEvent.click(screen.getAllByRole("button", { name: "Connect" })[0]);
     await userEvent.type(await screen.findByPlaceholderText("e.g. acme-corp"), "acme");
+    await userEvent.type(screen.getByPlaceholderText(/Paste a token/), "glpat-xyz");
     await userEvent.click(screen.getByRole("button", { name: "Connect GitLab" }));
     await screen.findByText("Connecting…");
   });

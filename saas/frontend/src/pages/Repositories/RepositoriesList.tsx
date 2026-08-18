@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Github, Layers, Plus } from "lucide-react";
+import { Github, Gitlab, Layers, Plus } from "lucide-react";
 import { api } from "../../api/client";
 import type { Repository } from "../../api/types";
 import { EmptyState } from "../../components/shared/EmptyState";
@@ -61,7 +61,7 @@ export default function RepositoriesList() {
                 <tr key={repo.id} className="border-b border-[#1a1a1a] last:border-0 hover:bg-[rgba(255,255,255,0.02)]">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2 text-white">
-                      <Github size={15} className="text-[#888]" />
+                      {repo.provider === "gitlab" ? <Gitlab size={15} className="text-[#888]" /> : <Github size={15} className="text-[#888]" />}
                       {repo.full_name}
                     </div>
                   </td>

@@ -106,6 +106,7 @@ function IntegrationRow({
           {integration.status === "connected" && integration.account_label && (
             <div className="text-xs text-[#666]">
               {integration.account_label}
+              {integration.base_url && <span className="text-[#555]"> · {integration.base_url}</span>}
               {integration.credential_last4 && <span className="text-[#555]"> · token ending in {integration.credential_last4}</span>}
             </div>
           )}
