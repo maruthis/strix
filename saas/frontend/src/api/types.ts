@@ -229,7 +229,9 @@ export interface Integration {
   category: "code" | "communication" | "issue_tracking";
   label: string;
   coming_soon: boolean;
+  configure_url: string | null;
   status: "connected" | "not_connected";
   account_label: string | null;
+  credential_last4: string | null;
   connected_at: string | null;
 }

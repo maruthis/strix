@@ -1,10 +1,12 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Github, Gitlab, GitFork, Slack, MessagesSquare, KanbanSquare, Ticket, type LucideIcon } from "lucide-react";
+import { Github, Gitlab, GitFork, Slack, MessagesSquare, KanbanSquare, Ticket, ExternalLink, type LucideIcon } from "lucide-react";
 import { api } from "../../api/client";
 import type { Integration } from "../../api/types";
 import { Button } from "../../components/shared/Form";
 import { toast } from "../../components/shared/Toast";
+import { ConnectProviderModal } from "./ConnectProviderModal";
 
 const PROVIDER_ICONS: Record<string, LucideIcon> = {
   github: Github,
@@ -24,19 +26,10 @@ const SECTIONS: { category: Integration["category"]; title: string; description:
 
 export default function IntegrationsList() {
   const queryClient = useQueryClient();
+  const [connectTarget, setConnectTarget] = useState<Integration | null>(null);
   const { data: integrations } = useQuery({
     queryKey: ["integrations"],
     queryFn: () => api.get<Integration[]>("/api/integrations"),
-  });
-
-  const connect = useMutation({
-    mutationFn: (provider: string) => api.post<Integration>(`/api/integrations/${provider}/connect`),
-    onSuccess: (updated) => {
-      queryClient.setQueryData<Integration[]>(["integrations"], (prev) =>
-        prev?.map((i) => (i.provider === updated.provider ? updated : i))
-      );
-      toast.success(`${updated.label} connected`);
-    },
   });
 
   const disconnect = useMutation({
@@ -67,15 +60,17 @@ export default function IntegrationsList() {
                 <IntegrationRow
                   key={integration.provider}
                   integration={integration}
-                  onConnect={() => connect.mutate(integration.provider)}
+                  onConnect={() => setConnectTarget(integration)}
                   onDisconnect={() => disconnect.mutate(integration.provider)}
-                  pending={connect.isPending || disconnect.isPending}
+                  pending={disconnect.isPending}
                 />
               ))}
             </div>
           </div>
         );
       })}
+
+      <ConnectProviderModal integration={connectTarget} onClose={() => setConnectTarget(null)} />
     </div>
   );
 }
@@ -109,7 +104,10 @@ function IntegrationRow({
             )}
           </div>
           {integration.status === "connected" && integration.account_label && (
-            <div className="text-xs text-[#666]">{integration.account_label}</div>
+            <div className="text-xs text-[#666]">
+              {integration.account_label}
+              {integration.credential_last4 && <span className="text-[#555]"> · token ending in {integration.credential_last4}</span>}
+            </div>
           )}
         </div>
       </div>
@@ -119,21 +117,26 @@ function IntegrationRow({
       ) : integration.status === "connected" ? (
         <div className="flex items-center gap-4 text-xs">
           {integration.provider === "github" && (
-            <>
-              <button className="text-[#aaa] hover:text-white" onClick={() => navigate("/repositories")}>
-                Connect more
-              </button>
-              <button className="text-[#aaa] hover:text-white" onClick={() => navigate("/repositories")}>
-                Configure
-              </button>
-            </>
+            <button className="text-[#aaa] hover:text-white" onClick={() => navigate("/repositories")}>
+              Connect more
+            </button>
+          )}
+          {integration.configure_url && (
+            <a
+              href={integration.configure_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-[#aaa] hover:text-white"
+            >
+              Configure <ExternalLink size={11} />
+            </a>
           )}
           <button className="text-red-400 hover:text-red-300" onClick={onDisconnect} disabled={pending}>
             Disconnect
           </button>
         </div>
       ) : (
-        <Button variant="secondary" onClick={onConnect} disabled={pending}>
+        <Button variant="secondary" onClick={onConnect}>
           Connect
         </Button>
       )}
