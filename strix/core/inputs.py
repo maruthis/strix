@@ -226,6 +226,18 @@ def build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _merge_extra_body(extra_body: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
+    """Merges `body` into an existing `extra_body` dict without clobbering
+    keys a different caller already put there. `ModelSettings.extra_body`
+    is a plain top-level field, not part of `extra_args` (which is the only
+    field `.resolve()` deep-merges automatically — see model_settings.py's
+    `resolve()`), so every caller that sets `extra_body` must merge by hand
+    or it silently overwrites whatever the previous caller set (see
+    `_reasoning_settings`, which also writes `extra_body` for the
+    reasoning_effort="max" case)."""
+    return {**(extra_body or {}), **body}
+
+
 def make_model_settings(
     reasoning_effort: ReasoningEffort | None,
     *,
@@ -237,12 +249,25 @@ def make_model_settings(
     has_tools: bool = True,
 ) -> ModelSettings:
     headers = _request_headers(model_name, extra_headers)
+    extra_body = None
+    if has_tools:
+        # parallel_tool_calls=False below is sent as an explicit request
+        # body field. Some LiteLLM-proxy-fronted providers (e.g. a
+        # self-hosted gateway without `litellm_settings: drop_params:
+        # true`) reject any request carrying a param outside their
+        # provider's supported set, even when it's just being set to its
+        # own default. allowed_openai_params tells a LiteLLM proxy to let
+        # this specific param through for this request rather than
+        # rejecting it — see https://docs.litellm.ai/docs/completion/drop_params.
+        # No effect on providers that already accept the param.
+        extra_body = _merge_extra_body(extra_body, {"allowed_openai_params": ["parallel_tool_calls"]})
     model_settings = ModelSettings(
         parallel_tool_calls=False if has_tools else None,
         retry=DEFAULT_MODEL_RETRY,
         include_usage=True,
         extra_args=request_timeout_extra_args(request_timeout),
         extra_headers=headers,
+        extra_body=extra_body,
     )
     if (
         reasoning_effort is not None
@@ -250,7 +275,7 @@ def make_model_settings(
         and model_supports_reasoning(model_name)
     ):
         model_settings = model_settings.resolve(
-            _reasoning_settings(reasoning_effort, model_settings.extra_args),
+            _reasoning_settings(reasoning_effort, model_settings.extra_body),
         )
     if force_required_tool_choice and _accepts_required_tool_choice(model_name):
         model_settings = model_settings.resolve(ModelSettings(tool_choice="required"))
@@ -278,7 +303,7 @@ def _request_headers(
 
 def _reasoning_settings(
     effort: ReasoningEffort,
-    extra_args: dict[str, Any] | None,
+    extra_body: dict[str, Any] | None,
 ) -> ModelSettings:
     """``max`` is not in the OpenAI SDK's ``Reasoning.effort`` enum, so send it as
     a raw body field instead — also keeping it clear of LiteLLM's DeepSeek mapping,
@@ -288,7 +313,7 @@ def _reasoning_settings(
     if effort != "max":
         return ModelSettings(reasoning=Reasoning(effort=effort))
     return ModelSettings(
-        extra_args={**(extra_args or {}), "extra_body": {"reasoning_effort": "max"}},
+        extra_body=_merge_extra_body(extra_body, {"reasoning_effort": "max"}),
     )
 
 

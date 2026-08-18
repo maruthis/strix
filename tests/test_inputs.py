@@ -97,18 +97,24 @@ def test_tool_config_point_not_leaked_to_non_bedrock_claude() -> None:
         assert all(p.get("location") != "tool_config" for p in points)
 
 
+_ALLOWED_OPENAI_PARAMS_ONLY = {"allowed_openai_params": ["parallel_tool_calls"]}
+
+
 def test_prompt_cache_can_be_disabled() -> None:
-    assert (
-        make_model_settings(
-            None, model_name="anthropic/claude-sonnet-4-5", prompt_cache=False
-        ).extra_args
-        is None
+    # No prompt-cache args left once disabled, but allowed_openai_params still
+    # rides along — it's tied to has_tools (default True), not prompt_cache.
+    settings = make_model_settings(
+        None, model_name="anthropic/claude-sonnet-4-5", prompt_cache=False
     )
+    assert settings.extra_args is None
+    assert settings.extra_body == _ALLOWED_OPENAI_PARAMS_ONLY
 
 
 @pytest.mark.parametrize("model_name", ["gpt-5", "vertex_ai/gemini-2.5-pro", "openai/o3"])
 def test_make_model_settings_no_prompt_cache_for_non_claude(model_name: str) -> None:
-    assert make_model_settings(None, model_name=model_name).extra_args is None
+    settings = make_model_settings(None, model_name=model_name)
+    assert settings.extra_args is None
+    assert settings.extra_body == _ALLOWED_OPENAI_PARAMS_ONLY
 
 
 def test_no_prompt_cache_for_unmapped_bedrock_claude_model(monkeypatch: Any) -> None:
@@ -118,7 +124,9 @@ def test_no_prompt_cache_for_unmapped_bedrock_claude_model(monkeypatch: Any) -> 
     if getattr(getattr(litellm, "utils", None), "supports_prompt_caching", None):
         monkeypatch.setattr(litellm.utils, "supports_prompt_caching", lambda *_a, **_k: False)
 
-    assert make_model_settings(None, model_name=unmapped).extra_args is None
+    settings = make_model_settings(None, model_name=unmapped)
+    assert settings.extra_args is None
+    assert settings.extra_body == _ALLOWED_OPENAI_PARAMS_ONLY
 
 
 def test_prompt_cache_kept_for_non_bedrock_claude_even_if_unmapped(monkeypatch: Any) -> None:
@@ -142,7 +150,8 @@ def test_max_reasoning_effort_sent_as_raw_body_field() -> None:
         "max", model_name="deepseek/deepseek-v4-flash", request_timeout=30
     )
     assert settings.reasoning is None
-    assert settings.extra_args == {"timeout": 30, "extra_body": {"reasoning_effort": "max"}}
+    assert settings.extra_args == {"timeout": 30}
+    assert settings.extra_body == {"allowed_openai_params": ["parallel_tool_calls"], "reasoning_effort": "max"}
 
 
 def test_conversation_tail_breakpoint_moves_with_appended_transcript() -> None:
@@ -309,6 +318,26 @@ def test_make_model_settings_omits_parallel_tool_calls_without_tools() -> None:
     assert settings.parallel_tool_calls is None
 
 
+def test_make_model_settings_allows_parallel_tool_calls_param_when_tools_present() -> None:
+    # parallel_tool_calls=False above is sent as an explicit request body
+    # field. A LiteLLM-proxy-fronted provider without `litellm_settings:
+    # drop_params: true` in its own config rejects any request carrying a
+    # param outside what it explicitly supports, even a default value —
+    # allowed_openai_params tells the proxy to let this one through for
+    # this request instead. See https://docs.litellm.ai/docs/completion/drop_params.
+    settings = make_model_settings("none", model_name="gpt-4o")
+
+    assert settings.extra_body == {"allowed_openai_params": ["parallel_tool_calls"]}
+
+
+def test_make_model_settings_omits_allowed_openai_params_without_tools() -> None:
+    # No parallel_tool_calls is sent at all in this case, so there's nothing
+    # for a strict proxy to reject — no need to allow-list it either.
+    settings = make_model_settings("none", model_name="gpt-4o", has_tools=False)
+
+    assert settings.extra_body is None
+
+
 def test_make_model_settings_sets_request_timeout() -> None:
     settings = make_model_settings(
         "none",
@@ -324,6 +353,7 @@ def test_make_model_settings_omits_timeout_when_unset() -> None:
     settings = make_model_settings("none", model_name="gpt-4o")
 
     assert settings.extra_args is None
+    assert settings.extra_body == _ALLOWED_OPENAI_PARAMS_ONLY
 
 
 def test_make_model_settings_sets_extra_headers() -> None:
