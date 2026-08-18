@@ -7,28 +7,40 @@ this module's `enqueue`/worker loop, not touching callers.
 
 Two scan backends:
 - `MockScanner` (default): waits briefly, then returns a handful of
-  realistic-looking findings, so the full pentest -> issues UI flow works
-  without Docker or LLM credentials.
+  canned, realistic-looking findings (not derived from the target at
+  all — same fixed list regardless of what repo/domain is picked), so the
+  full pentest -> issues UI flow works without Docker or LLM credentials.
 - Real scan: when `SAAS_ENABLE_REAL_SCAN=1`, invokes the upstream
   `strix.core.runner.run_strix_scan` engine (imported lazily, as a library
-  call — see saas/README.md's isolation rule: we never fork engine code).
-  Falls back to the mock scanner with a logged warning if the real engine
-  raises (e.g. Docker/LLM credentials missing), so the job queue never gets
-  stuck. Uses the target org's `OrgLlmSettings` (model/key/base) if
-  configured, applied via process env vars right before the call — see
-  `_run_real_scan`'s docstring for why that's only safe as long as this
-  module's worker loop stays single-scan-at-a-time (it is: `_worker_loop`
-  below awaits each job before dequeuing the next).
+  call — see saas/README.md's isolation rule: we never fork engine code)
+  for genuine source-aware analysis. A repository target is cloned locally
+  first — via the org's connected GitHub/GitLab credential when there is
+  one (`_repo_clone_url`, reusing `Integration.credential_encrypted` from
+  Settings > Integrations), else a plain unauthenticated clone that only
+  works for public repos — and mounted into the sandbox as a whitebox
+  target; a domain target is scanned as a live web application URL. Real
+  findings are read back from that run's `vulnerabilities.json` and
+  translated into the same shape `MOCK_FINDINGS` already uses, so the rest
+  of the pipeline (Issue creation, severity counting) doesn't need a
+  real-vs-mock branch. Falls back to the mock scanner with a logged
+  warning if the real engine raises (e.g. Docker/LLM credentials missing,
+  or cloning fails), so the job queue never gets stuck. Uses the target
+  org's `OrgLlmSettings` (model/key/base) if configured, applied via
+  process env vars right before the call — see `_run_real_scan`'s
+  docstring for why that's only safe as long as this module's worker loop
+  stays single-scan-at-a-time (it is: `_worker_loop` below awaits each job
+  before dequeuing the next).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
 import uuid
-from . import models
+from . import crypto, models
 from .db import SessionLocal
 from .settings import settings
 from .time_utils import utcnow
@@ -99,7 +111,7 @@ async def _run_pentest(pentest_id: str) -> None:
         # rows, so a mid-loop exception discards them along with the
         # attempt, which is what we want (no partial finding sets).
         try:
-            findings = await _scan(pentest, llm_settings)
+            findings = await _scan(db, pentest, llm_settings)
 
             severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
             for finding in findings:
@@ -148,10 +160,10 @@ async def _run_pentest(pentest_id: str) -> None:
         db.close()
 
 
-async def _scan(pentest: models.Pentest, llm_settings: models.OrgLlmSettings | None) -> list[dict]:
+async def _scan(db, pentest: models.Pentest, llm_settings: models.OrgLlmSettings | None) -> list[dict]:
     if settings.enable_real_scan:
         try:
-            return await _run_real_scan(pentest, llm_settings)
+            return await _run_real_scan(db, pentest, llm_settings)
         except Exception:  # noqa: BLE001
             logger.exception("real scan failed for pentest %s, falling back to mock scanner", pentest.id)
     return await _run_mock_scan(pentest)
@@ -160,7 +172,93 @@ async def _scan(pentest: models.Pentest, llm_settings: models.OrgLlmSettings | N
 _LLM_ENV_KEYS = ("STRIX_LLM", "LLM_API_KEY", "LLM_API_BASE")
 
 
-async def _run_real_scan(pentest: models.Pentest, llm_settings: models.OrgLlmSettings | None) -> list[dict]:
+def _repo_clone_url(db, org_id: str, repo: models.Repository) -> str:
+    """The URL to `git clone`, authenticated with the org's connected
+    GitHub/GitLab credential when there is one (see integrations.py —
+    same `Integration.credential_encrypted` used to list real repos).
+    Falls back to a plain, unauthenticated HTTPS URL when the repo's
+    provider isn't connected (or was connected without a credential, like
+    the seeded demo integration) — that only works for public repos, same
+    limitation `list_installable`'s mock-catalog fallback already has.
+    """
+    integration = db.query(models.Integration).filter_by(org_id=org_id, provider=repo.provider).first()
+    host = "github.com" if repo.provider == "github" else "gitlab.com"
+    if integration and integration.base_url:
+        host = integration.base_url.removeprefix("https://").removeprefix("http://").rstrip("/")
+    if integration and integration.credential_encrypted:
+        token = crypto.decrypt(integration.credential_encrypted)
+        auth = f"x-access-token:{token}" if repo.provider == "github" else f"oauth2:{token}"
+        return f"https://{auth}@{host}/{repo.full_name}.git"
+    return f"https://{host}/{repo.full_name}.git"
+
+
+async def _build_scan_targets(db, pentest: models.Pentest) -> tuple[list[dict], list[dict]]:
+    """Builds `run_strix_scan`'s `targets`/`local_sources` arguments for
+    this pentest's target — matching the exact shape
+    `strix.interface.utils.collect_local_sources`/`build_root_task` expect
+    (see strix/core/inputs.py). A repository target is cloned locally
+    first (source-aware/whitebox scanning — the engine reads the actual
+    checked-out code, not just a URL); a domain target is a live web
+    application URL, no local checkout needed.
+    """
+    if pentest.target_type == "repository":
+        repo = db.get(models.Repository, pentest.target_id)
+        if repo is None:
+            raise RuntimeError(f"repository {pentest.target_id} not found")
+
+        from strix.interface.utils import clone_repository  # lazy import: optional dependency
+
+        clone_url = _repo_clone_url(db, pentest.org_id, repo)
+        # git clone shells out and blocks; run off the event loop so the
+        # single-scan-at-a-time worker doesn't stall other request handling.
+        cloned_path = await asyncio.to_thread(clone_repository, clone_url, pentest.id)
+        targets = [
+            {
+                "type": "repository",
+                "details": {
+                    "target_repo": repo.full_name,
+                    "cloned_repo_path": cloned_path,
+                    "workspace_subdir": repo.full_name.split("/")[-1],
+                },
+            }
+        ]
+        local_sources = [
+            {"source_path": cloned_path, "workspace_subdir": repo.full_name.split("/")[-1], "protect_metadata": False}
+        ]
+        return targets, local_sources
+
+    if pentest.target_type == "domain":
+        domain = db.get(models.Domain, pentest.target_id)
+        if domain is None:
+            raise RuntimeError(f"domain {pentest.target_id} not found")
+        targets = [{"type": "web_application", "details": {"target_url": f"https://{domain.hostname}"}}]
+        return targets, []
+
+    raise RuntimeError(f"unsupported target_type {pentest.target_type!r}")
+
+
+def _translate_real_finding(raw: dict) -> dict:
+    """Normalizes one of `ReportState`'s vulnerability-report dicts (see
+    strix/report/state.py's `add_vulnerability_report` — most fields are
+    only added when truthy, so many are simply absent) into the fully
+    populated shape `_run_pentest` expects, matching `MOCK_FINDINGS`'
+    shape below so the rest of the pipeline needs no real-vs-mock branch."""
+    return {
+        "title": raw.get("title") or "Untitled finding",
+        "description": raw.get("description") or "",
+        "severity": (raw.get("severity") or "low").lower(),
+        "cvss": raw.get("cvss"),
+        "cvss_breakdown": raw.get("cvss_breakdown") or {},
+        "technical_analysis": raw.get("technical_analysis") or "",
+        "remediation_steps": raw.get("remediation_steps") or "",
+        "poc_description": raw.get("poc_description") or "",
+        "target": raw.get("target") or "",
+        "endpoint": raw.get("endpoint") or "",
+        "fix_effort": raw.get("fix_effort") or "medium",
+    }
+
+
+async def _run_real_scan(db, pentest: models.Pentest, llm_settings: models.OrgLlmSettings | None) -> list[dict]:
     """Invoke the upstream strix engine as a library. Requires Docker + LLM credentials.
 
     If `llm_settings` has a model configured, this org's model/key/base
@@ -179,7 +277,9 @@ async def _run_real_scan(pentest: models.Pentest, llm_settings: models.OrgLlmSet
     same global state. Don't parallelize the worker without also isolating
     each scan (e.g. one subprocess per scan) if per-org credentials matter.
     """
+    from strix.config import load_settings
     from strix.config import loader as strix_config_loader
+    from strix.core.paths import run_dir_for
     from strix.core.runner import run_strix_scan  # lazy import: optional dependency
 
     override_active = bool(llm_settings and llm_settings.model)
@@ -196,18 +296,27 @@ async def _run_real_scan(pentest: models.Pentest, llm_settings: models.OrgLlmSet
         strix_config_loader._cached = None
 
     try:
+        targets, local_sources = await _build_scan_targets(db, pentest)
         scan_config = {
             "scan_id": pentest.id,
-            "targets": [pentest.target_label],
-            "run_name": f"saas-{pentest.id}",
+            "targets": targets,
+            "run_name": pentest.id,
             "scan_mode": pentest.scan_mode,
         }
-        await run_strix_scan(scan_config=scan_config, scan_id=pentest.id)
-        # Real findings land in the run's ReportState/vulnerabilities.json;
-        # a follow-up task should translate those into the shape
-        # `_run_pentest` expects here (see TASKS.md P6-5) once Docker/LLM
-        # creds are available to actually exercise this path end-to-end.
-        return []
+        await run_strix_scan(
+            scan_config=scan_config,
+            scan_id=pentest.id,
+            image=load_settings().runtime.image,
+            local_sources=local_sources,
+        )
+
+        vulnerabilities_path = run_dir_for(pentest.id) / "vulnerabilities.json"
+        if not vulnerabilities_path.exists():
+            return []
+        raw_findings = json.loads(vulnerabilities_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_findings, list):
+            return []
+        return [_translate_real_finding(f) for f in raw_findings if isinstance(f, dict)]
     finally:
         if override_active and previous_env is not None:
             for key, value in previous_env.items():

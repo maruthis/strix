@@ -10,7 +10,7 @@ locally with **zero configuration** — every setting below is optional.
 | `SAAS_DEV_MODE` | `true` | When true: OTP codes and invitation tokens are returned directly in API responses instead of emailed; cookies aren't marked `Secure`. Set to `false` once a real email provider is wired up. |
 | `SAAS_SESSION_SECRET` | insecure dev value | Change this for any non-local deployment. |
 | `SAAS_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS allow-origin for the frontend dev server / deployed frontend. |
-| `SAAS_ENABLE_REAL_SCAN` | `false` | When true, pentests invoke the real `strix.core.runner.run_strix_scan` engine (Docker + LLM credentials required) instead of the mock scanner. Falls back to mock on any failure. |
+| `SAAS_ENABLE_REAL_SCAN` | `false` | When true, pentests invoke the real `strix.core.runner.run_strix_scan` engine (Docker + LLM credentials required) instead of the mock scanner. A repository target is cloned locally first — authenticated with the org's connected GitHub/GitLab credential when there is one — and scanned whitebox; findings are read back from that run's `vulnerabilities.json`. Falls back to mock on any failure (clone failure included), so a pentest never gets stuck. |
 | `SAAS_STRIPE_SECRET_KEY`, `SAAS_STRIPE_WEBHOOK_SECRET` | unset | Set to activate `RealStripeProvider` (see `app/providers/billing.py`) instead of the mock. Requires a Stripe account. |
 | `SAAS_CREDENTIALS_ENCRYPTION_KEY` | insecure dev value | Encrypts GitHub/GitLab personal access tokens at rest (see `app/crypto.py`). Any string works (it's hashed into a valid Fernet key) — change it for any non-local deployment, same as `SAAS_SESSION_SECRET`. |
 
@@ -38,14 +38,17 @@ plaintext for display. See `app/providers/git_hosting.py`.
 **Scope, deliberately narrow for now:** connecting and listing real repos
 (`GET /user/repos` / `GET /projects?membership=true`) — the "Add
 Repository" picker on both Repositories and PR Reviews shows real repos
-once connected. Posting real check-runs/PR comments and receiving webhooks
-are **not** wired up yet; PR review results still post through the mock
-GitHub App path (`app/providers/github.py`'s `get_github_provider()`,
-unrelated to the per-org token above — see that file's docstring for why
-they're intentionally two separate things). An org that hasn't connected
-GitHub falls back to a fixed mock repo catalog (so the demo/seed org keeps
-working with zero setup); an unconnected GitLab shows nothing to add,
-since GitLab never had a mock catalog.
+once connected — and, when `SAAS_ENABLE_REAL_SCAN=1`, authenticating the
+`git clone` a real pentest runs against. Posting real check-runs/PR
+comments and receiving webhooks are **not** wired up yet; PR review
+results still post through the mock GitHub App path
+(`app/providers/github.py`'s `get_github_provider()`, unrelated to the
+per-org token above — see that file's docstring for why they're
+intentionally two separate things). An org that hasn't connected GitHub
+falls back to a fixed mock repo catalog (so the demo/seed org keeps
+working with zero setup) and an unauthenticated clone for real scans
+(public repos only); an unconnected GitLab shows nothing to add, since
+GitLab never had a mock catalog.
 
 ## What else is mocked by default, and why
 
