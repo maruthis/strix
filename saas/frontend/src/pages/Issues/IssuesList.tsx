@@ -3,10 +3,11 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ListChecks } from "lucide-react";
 import { api } from "../../api/client";
-import type { Issue, IssueStatus, IssuesResponse } from "../../api/types";
+import type { Issue, IssueStatus, IssuesResponse, Pentest, Repository } from "../../api/types";
 import { EmptyState } from "../../components/shared/EmptyState";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { FilterBar, Tabs } from "../../components/shared/FilterBar";
+import { Select } from "../../components/shared/Form";
 import { ViewToggle, type ViewMode } from "../../components/shared/ViewToggle";
 import { Board } from "../../components/shared/Board";
 import { timeAgo } from "../../lib/format";
@@ -32,12 +33,33 @@ export default function IssuesList() {
   const [status, setStatus] = useState("open");
   const [search, setSearch] = useState("");
   const [view, setView] = useState<ViewMode>("list");
+  const [repositoryId, setRepositoryId] = useState("");
+  const [pentestId, setPentestId] = useState("");
+
+  const { data: repositories } = useQuery({
+    queryKey: ["repositories"],
+    queryFn: () => api.get<Repository[]>("/api/repositories"),
+  });
+  const { data: pentests } = useQuery({
+    queryKey: ["pentests"],
+    queryFn: () => api.get<Pentest[]>("/api/pentests"),
+  });
 
   // Board mode always shows every status grouped into columns, so it fetches
   // unfiltered regardless of the status tab (which only applies to list mode).
+  // Repository/pentest filters apply in both views — they narrow the actual
+  // dataset, not just how the current status is displayed.
+  const effectiveStatus = view === "board" ? "all" : status;
   const { data, isLoading } = useQuery({
-    queryKey: ["issues", view === "board" ? "all" : status],
-    queryFn: () => api.get<IssuesResponse>(`/api/issues${view !== "board" && status !== "all" ? `?status_filter=${status}` : ""}`),
+    queryKey: ["issues", effectiveStatus, repositoryId, pentestId],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (effectiveStatus !== "all") params.set("status_filter", effectiveStatus);
+      if (repositoryId) params.set("repository_id", repositoryId);
+      if (pentestId) params.set("pentest_id", pentestId);
+      const qs = params.toString();
+      return api.get<IssuesResponse>(`/api/issues${qs ? `?${qs}` : ""}`);
+    },
   });
 
   const items = (data?.items ?? []).filter((i) => i.title.toLowerCase().includes(search.toLowerCase()));
@@ -60,6 +82,19 @@ export default function IssuesList() {
       )}
 
       <FilterBar search={search} onSearch={setSearch} placeholder="Search issues...">
+        <Select
+          value={repositoryId}
+          onChange={setRepositoryId}
+          options={[{ value: "", label: "All Repositories" }, ...(repositories ?? []).map((r) => ({ value: r.id, label: r.full_name }))]}
+        />
+        <Select
+          value={pentestId}
+          onChange={setPentestId}
+          options={[
+            { value: "", label: "All Pentests" },
+            ...(pentests ?? []).map((p) => ({ value: p.id, label: `${p.target_label} · ${timeAgo(p.created_at)}` })),
+          ]}
+        />
         <ViewToggle view={view} onChange={setView} />
       </FilterBar>
 

@@ -48,6 +48,7 @@ def list_issues(
     severity: str | None = None,
     repository_id: str | None = None,
     domain_id: str | None = None,
+    pentest_id: str | None = None,
     org: models.Organization = Depends(current_org),
     db: Session = Depends(db_dep),
 ) -> dict:
@@ -60,14 +61,31 @@ def list_issues(
         q = q.filter(models.Issue.repository_id == repository_id)
     if domain_id:
         q = q.filter(models.Issue.domain_id == domain_id)
+    if pentest_id:
+        q = q.filter(models.Issue.pentest_id == pentest_id)
     issues = q.order_by(models.Issue.created_at.desc()).all()
 
     # Grouped SQL aggregates instead of pulling every org issue's full row
     # into Python twice more just to tally severities/statuses (was 3x full
-    # scans — see saas/TASKS.md).
+    # scans — see saas/TASKS.md). Scoped by the same repository/domain/pentest
+    # filters as the list above (but not status_filter — severity_counts
+    # already excludes fixed/ignored on its own, and status_counts is what
+    # drives the status tabs, so it must cover every status regardless of
+    # which one is currently selected) so the summary strip and tab counts
+    # stay consistent with whatever repo/pentest is selected instead of
+    # always showing org-wide totals.
+    def _scoped(query):
+        if repository_id:
+            query = query.filter(models.Issue.repository_id == repository_id)
+        if domain_id:
+            query = query.filter(models.Issue.domain_id == domain_id)
+        if pentest_id:
+            query = query.filter(models.Issue.pentest_id == pentest_id)
+        return query
+
     severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
     severity_rows = (
-        db.query(models.Issue.severity, func.count(models.Issue.id))
+        _scoped(db.query(models.Issue.severity, func.count(models.Issue.id)))
         .filter(models.Issue.org_id == org.id, models.Issue.status.notin_(["fixed", "ignored"]))
         .group_by(models.Issue.severity)
         .all()
@@ -76,7 +94,12 @@ def list_issues(
         severity_counts[sev] = count
 
     status_counts = {s: 0 for s in ["all", "open", "in_progress", "snoozed", "fixed", "ignored"]}
-    status_rows = db.query(models.Issue.status, func.count(models.Issue.id)).filter(models.Issue.org_id == org.id).group_by(models.Issue.status).all()
+    status_rows = (
+        _scoped(db.query(models.Issue.status, func.count(models.Issue.id)))
+        .filter(models.Issue.org_id == org.id)
+        .group_by(models.Issue.status)
+        .all()
+    )
     for st, count in status_rows:
         status_counts[st] = count
         status_counts["all"] += count

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
-import { mockFetchImpl, mockFetchJson } from "../../test/mock-fetch";
+import { mockFetchImpl } from "../../test/mock-fetch";
 import IssuesList from "./IssuesList";
 
 afterEach(() => {
@@ -48,15 +48,39 @@ const RESPONSE = {
   status_counts: { all: 1, open: 1, in_progress: 0, snoozed: 0, fixed: 0, ignored: 0 },
 };
 
+const REPO = { id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 1 };
+const PENTEST = {
+  id: "p1",
+  org_id: "o1",
+  target_type: "repository",
+  target_id: "r1",
+  target_label: "acme/widgets",
+  scan_mode: "deep",
+  status: "completed",
+  started_at: new Date().toISOString(),
+  finished_at: new Date().toISOString(),
+  severity_counts: { critical: 1 },
+  created_at: new Date().toISOString(),
+};
+
+function mockIssuesEnv(issuesResponse: unknown) {
+  return mockFetchImpl(async (url) => {
+    if (url.startsWith("/api/issues")) return jsonRes(issuesResponse);
+    if (url.startsWith("/api/repositories")) return jsonRes([REPO]);
+    if (url.startsWith("/api/pentests")) return jsonRes([PENTEST]);
+    return jsonRes([]);
+  });
+}
+
 describe("IssuesList", () => {
   it("shows an empty state when there are no issues", async () => {
-    mockFetchJson({ body: { items: [], severity_counts: { critical: 0, high: 0, medium: 0, low: 0 }, status_counts: { all: 0 } } });
+    mockIssuesEnv({ items: [], severity_counts: { critical: 0, high: 0, medium: 0, low: 0 }, status_counts: { all: 0 } });
     renderWithProviders(<IssuesList />);
     await screen.findByText("No issues");
   });
 
   it("renders the severity summary, tabs, and issue rows", async () => {
-    mockFetchJson({ body: RESPONSE });
+    mockIssuesEnv(RESPONSE);
     renderWithProviders(<IssuesList />);
     await screen.findByText("SQL injection");
     expect(screen.getAllByText("1").length).toBeGreaterThan(0);
@@ -64,7 +88,7 @@ describe("IssuesList", () => {
   });
 
   it("filters issues client-side by search text", async () => {
-    mockFetchJson({ body: RESPONSE });
+    mockIssuesEnv(RESPONSE);
     renderWithProviders(<IssuesList />);
     await screen.findByText("SQL injection");
     await userEvent.type(screen.getByPlaceholderText("Search issues..."), "nonexistent");
@@ -72,19 +96,17 @@ describe("IssuesList", () => {
   });
 
   it("switches status tabs", async () => {
-    mockFetchJson({ body: RESPONSE });
+    mockIssuesEnv(RESPONSE);
     renderWithProviders(<IssuesList />);
     await screen.findByText("SQL injection");
     await userEvent.click(screen.getByText("Fixed"));
   });
 
   it("switches to board view and groups issues by status", async () => {
-    mockFetchJson({
-      body: {
-        items: [makeIssue({ id: "i1", status: "open" }), makeIssue({ id: "i2", status: "fixed", title: "XSS" })],
-        severity_counts: { critical: 2, high: 0, medium: 0, low: 0 },
-        status_counts: { all: 2, open: 1, fixed: 1 },
-      },
+    mockIssuesEnv({
+      items: [makeIssue({ id: "i1", status: "open" }), makeIssue({ id: "i2", status: "fixed", title: "XSS" })],
+      severity_counts: { critical: 2, high: 0, medium: 0, low: 0 },
+      status_counts: { all: 2, open: 1, fixed: 1 },
     });
     renderWithProviders(<IssuesList />);
     await screen.findByText("SQL injection");
@@ -97,9 +119,44 @@ describe("IssuesList", () => {
   });
 
   it("shows nothing in board mode when there are no issues at all", async () => {
-    mockFetchJson({ body: { items: [], severity_counts: { critical: 0, high: 0, medium: 0, low: 0 }, status_counts: { all: 0 } } });
+    mockIssuesEnv({ items: [], severity_counts: { critical: 0, high: 0, medium: 0, low: 0 }, status_counts: { all: 0 } });
     renderWithProviders(<IssuesList />);
     await screen.findByText("No issues");
     await userEvent.click(screen.getByText("Board"));
+  });
+
+  it("populates the repository and pentest filter dropdowns", async () => {
+    mockIssuesEnv(RESPONSE);
+    renderWithProviders(<IssuesList />);
+    await screen.findByText("SQL injection");
+
+    expect(screen.getByRole("option", { name: "All Repositories" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "acme/widgets" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "All Pentests" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /acme\/widgets ·/ })).toBeInTheDocument();
+  });
+
+  it("refetches issues scoped to the selected repository", async () => {
+    const fetchMock = mockIssuesEnv(RESPONSE);
+    renderWithProviders(<IssuesList />);
+    await screen.findByText("SQL injection");
+
+    await userEvent.selectOptions(screen.getByDisplayValue("All Repositories"), "r1");
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("repository_id=r1"))).toBe(true);
+    });
+  });
+
+  it("refetches issues scoped to the selected pentest", async () => {
+    const fetchMock = mockIssuesEnv(RESPONSE);
+    renderWithProviders(<IssuesList />);
+    await screen.findByText("SQL injection");
+
+    await userEvent.selectOptions(screen.getByDisplayValue("All Pentests"), "p1");
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("pentest_id=p1"))).toBe(true);
+    });
   });
 });

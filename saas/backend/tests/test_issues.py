@@ -111,6 +111,61 @@ def test_list_issues_domain_id_filter(auth_client):
     assert by_other["items"] == []
 
 
+def test_list_issues_pentest_id_filter(auth_client):
+    client, _org = auth_client
+    repo_a = add_repo(client, "acme/widgets")
+    repo_b = add_repo(client, "acme/gadgets")
+    pentest_a = _run_pentest_to_completion(client, repo_a)
+    pentest_b = _run_pentest_to_completion(client, repo_b)
+
+    by_pentest_a = client.get(f"/api/issues?pentest_id={pentest_a['id']}").json()
+    assert len(by_pentest_a["items"]) > 0
+    assert all(i["pentest_id"] == pentest_a["id"] for i in by_pentest_a["items"])
+
+    by_pentest_b = client.get(f"/api/issues?pentest_id={pentest_b['id']}").json()
+    assert all(i["pentest_id"] == pentest_b["id"] for i in by_pentest_b["items"])
+    assert set(i["id"] for i in by_pentest_a["items"]).isdisjoint(i["id"] for i in by_pentest_b["items"])
+
+
+def test_list_issues_pentest_id_filter_no_match(auth_client):
+    client, _org = auth_client
+    repo = add_repo(client)
+    _run_pentest_to_completion(client, repo)
+
+    res = client.get("/api/issues?pentest_id=does-not-exist").json()
+    assert res["items"] == []
+
+
+def test_severity_and_status_counts_scoped_to_repository_filter(auth_client):
+    """The summary strip / status tabs must reflect the filtered repo, not
+    the whole org — otherwise picking a repo filter would narrow the list
+    while the counts above it stayed at the org-wide totals."""
+    client, _org = auth_client
+    repo_a = add_repo(client, "acme/widgets")
+    repo_b = add_repo(client, "acme/gadgets")
+    _run_pentest_to_completion(client, repo_a)
+    _run_pentest_to_completion(client, repo_b)
+
+    org_wide = client.get("/api/issues").json()
+    scoped = client.get(f"/api/issues?repository_id={repo_a['id']}").json()
+
+    assert sum(scoped["severity_counts"].values()) == len(scoped["items"])
+    assert scoped["status_counts"]["all"] == len(scoped["items"])
+    assert scoped["status_counts"]["all"] < org_wide["status_counts"]["all"]
+
+
+def test_severity_and_status_counts_scoped_to_pentest_filter(auth_client):
+    client, _org = auth_client
+    repo_a = add_repo(client, "acme/widgets")
+    repo_b = add_repo(client, "acme/gadgets")
+    pentest_a = _run_pentest_to_completion(client, repo_a)
+    _run_pentest_to_completion(client, repo_b)
+
+    scoped = client.get(f"/api/issues?pentest_id={pentest_a['id']}").json()
+    assert sum(scoped["severity_counts"].values()) == len(scoped["items"])
+    assert scoped["status_counts"]["all"] == len(scoped["items"])
+
+
 def test_severity_and_status_counts_correct_across_multiple_scans(auth_client):
     """Regression check for the 3x-full-scan -> grouped-aggregate refactor:
     counts must stay accurate once issues span several severities and one
