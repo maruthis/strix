@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..deps import current_org, current_user, db_dep, require_admin
 from ..time_utils import utcnow
-from .orgs import _record_audit
+from ..audit import record_audit as _record_audit
 
 router = APIRouter(prefix="/api/settings/tokens", tags=["settings"])
 
@@ -76,6 +76,7 @@ def create_token(
 def revoke_token(
     token_id: str,
     org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
     _admin=Depends(require_admin),
     db: Session = Depends(db_dep),
 ) -> dict:
@@ -86,4 +87,5 @@ def revoke_token(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
     token.status = "revoked"
     db.commit()
+    _record_audit(db, org.id, user.id, "api_token.revoked", token.name)
     return {"ok": True}

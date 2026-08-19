@@ -84,14 +84,14 @@ export function Toggle({ checked, onChange, disabled }: { checked: boolean; onCh
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-40",
+        "relative inline-block h-6 w-11 shrink-0 overflow-hidden rounded-full border border-transparent transition-colors disabled:opacity-40",
         checked ? "bg-white" : "bg-[#2a2a2a]"
       )}
     >
       <span
         className={cn(
-          "absolute top-0.5 h-5 w-5 rounded-full transition-transform",
-          checked ? "translate-x-5 bg-black" : "translate-x-0.5 bg-[#888]"
+          "absolute top-0.5 left-0.5 h-5 w-5 rounded-full transition-transform",
+          checked ? "translate-x-5 bg-black" : "translate-x-0 bg-[#888]"
         )}
       />
     </button>

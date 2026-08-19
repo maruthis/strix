@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..audit import record_audit as _record_audit
 from ..deps import current_org, current_user, db_dep
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -89,6 +90,7 @@ def create_session(
     session = models.ChatSession(org_id=org.id, user_id=user.id, category=body.category)
     db.add(session)
     db.commit()
+    _record_audit(db, org.id, user.id, "chat.session_created", session.category)
     return _serialize_session(session)
 
 

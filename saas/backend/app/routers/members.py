@@ -8,7 +8,7 @@ from .. import models, schemas
 from ..deps import current_org, current_user, db_dep, require_admin
 from ..settings import settings
 from ..time_utils import utcnow
-from .orgs import _record_audit
+from ..audit import record_audit as _record_audit
 
 router = APIRouter(prefix="/api/members", tags=["members"])
 

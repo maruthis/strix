@@ -53,7 +53,7 @@ export function AddRepositoryModal({ open, onClose }: { open: boolean; onClose: 
         ))}
       </div>
 
-      <div className="space-y-1.5">
+      <div className="max-h-[min(60vh,420px)] space-y-1.5 overflow-y-auto pr-1">
         {!isLoading && installable?.length === 0 && (
           <p className="py-6 text-center text-sm text-[#666]">
             No more repositories to add. Connect {PROVIDER_LABEL[provider]} (or add more repos to it) from{" "}
@@ -64,13 +64,15 @@ export function AddRepositoryModal({ open, onClose }: { open: boolean; onClose: 
           </p>
         )}
         {installable?.map((repo) => (
-          <div key={repo.full_name} className="flex items-center justify-between rounded-lg border border-[#222] px-3 py-2.5">
-            <div className="flex items-center gap-2 text-sm text-white">
-              <Icon size={15} className="text-[#888]" />
-              {repo.full_name}
-              {repo.private && <span className="rounded-full border border-[#333] px-1.5 py-0.5 text-[10px] text-[#888]">Private</span>}
+          <div key={repo.full_name} className="flex items-center justify-between gap-4 rounded-lg border border-[#222] px-3 py-2.5">
+            <div className="flex min-w-0 items-center gap-2 text-sm text-white">
+              <Icon size={15} className="shrink-0 text-[#888]" />
+              <span className="break-all">{repo.full_name}</span>
+              {repo.private && (
+                <span className="shrink-0 rounded-full border border-[#333] px-1.5 py-0.5 text-[10px] text-[#888]">Private</span>
+              )}
             </div>
-            <Button variant="secondary" onClick={() => add.mutate(repo)} disabled={add.isPending}>
+            <Button variant="secondary" className="shrink-0" onClick={() => add.mutate(repo)} disabled={add.isPending}>
               Add
             </Button>
           </div>

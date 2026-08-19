@@ -5,7 +5,7 @@ const TABS = [
   { to: "/settings", label: "General", end: true },
   { to: "/settings/llm-provider", label: "LLM Provider" },
   { to: "/settings/api-access", label: "API Access" },
-  { to: "/settings/audit-logs", label: "Audit Logs" },
+  { to: "/settings/audit-logs", label: "Logs & Audit" },
   { to: "/settings/members", label: "Members" },
   { to: "/settings/billing", label: "Billing" },
   { to: "/settings/help-support", label: "Help & Support" },

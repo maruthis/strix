@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
+from ..audit import record_audit as _record_audit
 from ..deps import current_session, current_user, db_dep
 from ..settings import settings
 from ..time_utils import utcnow
@@ -101,14 +102,24 @@ def otp_verify(body: OtpVerifyIn, response: Response, db: Session = Depends(db_d
     db.commit()
 
     _set_session_cookie(response, session.token)
+    # Pre-auth events (OTP requested, wrong code, expired code) have no org
+    # to scope an AuditLogEntry to — they're already covered by the
+    # org-agnostic request log (any non-GET or error response is logged
+    # there regardless of auth state). Once login succeeds and an org is
+    # resolved, that's the first point an org-scoped audit entry makes sense.
+    if session.active_org_id:
+        _record_audit(db, session.active_org_id, user.id, "auth.login_succeeded", user.email)
     return _me_payload(db, user, session)
 
 
 @router.post("/logout")
-def logout(response: Response, sess: models.Session_ = Depends(current_session), db: Session = Depends(db_dep)) -> dict:
+def logout(response: Response, sess: models.Session_ = Depends(current_session), user: models.User = Depends(current_user), db: Session = Depends(db_dep)) -> dict:
+    active_org_id = sess.active_org_id
     db.delete(sess)
     db.commit()
     response.delete_cookie(settings.session_cookie_name)
+    if active_org_id:
+        _record_audit(db, active_org_id, user.id, "auth.logout", user.email)
     return {"ok": True}
 
 

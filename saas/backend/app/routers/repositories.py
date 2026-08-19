@@ -9,7 +9,7 @@ from .. import models
 from ..deps import current_org, current_user, db_dep, require_admin
 from ..providers.github import MockGitHubProvider
 from .integrations import list_live_repos
-from .orgs import _record_audit
+from ..audit import record_audit as _record_audit
 from .pentests import create_and_enqueue_pentest
 
 SUPPORTED_PROVIDERS = {"github", "gitlab"}
@@ -124,14 +124,17 @@ def update_repository(
 def remove_repository(
     repository_id: str,
     org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
     _admin=Depends(require_admin),
     db: Session = Depends(db_dep),
 ) -> dict:
     repo = db.get(models.Repository, repository_id)
     if not repo or repo.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    full_name = repo.full_name
     db.delete(repo)
     db.commit()
+    _record_audit(db, org.id, user.id, "repository.removed", full_name)
     return {"ok": True}
 
 

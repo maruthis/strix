@@ -34,6 +34,7 @@ ALL_ROUTERS = [
     webhooks.router,
     billing.router,
     audit.router,
+    audit.request_log_router,
     llm_settings.router,
     integrations.router,
 ]

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
+from ..audit import record_audit as _record_audit
 from ..deps import current_org, current_session, current_user, db_dep, require_admin
 from ..time_utils import utcnow
 
@@ -86,8 +87,3 @@ def delete_org(
     db.delete(org)
     db.commit()
     return {"ok": True}
-
-
-def _record_audit(db: Session, org_id: str, actor_user_id: str | None, action: str, target: str, extra: dict | None = None) -> None:
-    db.add(models.AuditLogEntry(org_id=org_id, actor_user_id=actor_user_id, action=action, target=target, extra=extra or {}))
-    db.commit()

@@ -7,7 +7,7 @@ import type { Issue, IssueStatus, IssuesResponse, Pentest, Repository } from "..
 import { EmptyState } from "../../components/shared/EmptyState";
 import { StatusPill } from "../../components/shared/StatusPill";
 import { FilterBar, Tabs } from "../../components/shared/FilterBar";
-import { Select } from "../../components/shared/Form";
+import { ListSelect } from "../../components/shared/ListSelect";
 import { ViewToggle, type ViewMode } from "../../components/shared/ViewToggle";
 import { Board } from "../../components/shared/Board";
 import { timeAgo } from "../../lib/format";
@@ -82,17 +82,22 @@ export default function IssuesList() {
       )}
 
       <FilterBar search={search} onSearch={setSearch} placeholder="Search issues...">
-        <Select
+        <ListSelect
           value={repositoryId}
           onChange={setRepositoryId}
+          ariaLabel="Filter by repository"
           options={[{ value: "", label: "All Repositories" }, ...(repositories ?? []).map((r) => ({ value: r.id, label: r.full_name }))]}
         />
-        <Select
+        <ListSelect
           value={pentestId}
           onChange={setPentestId}
+          ariaLabel="Filter by pentest"
           options={[
             { value: "", label: "All Pentests" },
-            ...(pentests ?? []).map((p) => ({ value: p.id, label: `${p.target_label} · ${timeAgo(p.created_at)}` })),
+            ...(pentests ?? []).map((p) => ({
+              value: p.id,
+              label: `${p.id.slice(0, 8)} · ${p.target_label} · ${timeAgo(p.created_at)}`,
+            })),
           ]}
         />
         <ViewToggle view={view} onChange={setView} />

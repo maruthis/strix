@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..deps import current_org, require_admin, db_dep
+from ..audit import record_audit as _record_audit
+from ..deps import current_org, current_user, require_admin, db_dep
 from ..providers import get_billing_provider
 
 router = APIRouter(prefix="/api/settings/billing", tags=["settings"])
@@ -37,7 +38,12 @@ def get_billing(org: models.Organization = Depends(current_org), db: Session = D
 
 
 @router.post("/add-card")
-def add_card(org: models.Organization = Depends(current_org), _admin=Depends(require_admin), db: Session = Depends(db_dep)) -> dict:
+def add_card(
+    org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
+    _admin=Depends(require_admin),
+    db: Session = Depends(db_dep),
+) -> dict:
     provider = get_billing_provider()
     try:
         provider.attach_card(org_id=org.id)
@@ -50,6 +56,7 @@ def add_card(org: models.Organization = Depends(current_org), _admin=Depends(req
     sub.card_added = True
     sub.status = "active"
     db.commit()
+    _record_audit(db, org.id, user.id, "billing.card_added", org.name)
     return _serialize(sub)
 
 

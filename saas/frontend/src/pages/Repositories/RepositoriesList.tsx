@@ -66,13 +66,15 @@ export default function RepositoriesList() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-[#aaa]">{repo.open_issues_count || "—"}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
+                  <td className="min-w-[150px] px-4 py-3">
+                    <div className="flex flex-nowrap items-center gap-2.5">
                       <Toggle
                         checked={repo.auto_review_enabled}
                         onChange={(v) => toggleAutoReview.mutate({ id: repo.id, enabled: v })}
                       />
-                      <StatusPill value={repo.auto_review_enabled ? "enabled" : "disabled"} />
+                      <span className="shrink-0 whitespace-nowrap">
+                        <StatusPill value={repo.auto_review_enabled ? "enabled" : "disabled"} />
+                      </span>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-[#aaa]">{repo.last_tested_at ? timeAgo(repo.last_tested_at) : "—"}</td>

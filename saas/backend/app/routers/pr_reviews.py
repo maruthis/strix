@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..deps import current_org, db_dep, require_admin
+from ..audit import record_audit as _record_audit
+from ..deps import current_org, current_user, db_dep, require_admin
 from ..jobs import MOCK_FINDINGS
 from ..providers import get_github_provider
 
@@ -137,6 +138,7 @@ def _run_pr_review(db: Session, org: models.Organization, repo: models.Repositor
 def trigger_pr_review(
     body: NewPRReviewIn,
     org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
     db: Session = Depends(db_dep),
 ) -> dict:
     repo = db.get(models.Repository, body.repository_id)
@@ -144,6 +146,7 @@ def trigger_pr_review(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="repository_not_found")
 
     review = _run_pr_review(db, org, repo, body.pr_number, body.title, body.author)
+    _record_audit(db, org.id, user.id, "pr_review.triggered", f"{repo.full_name}#{body.pr_number}")
     return _serialize_one(review, db)
 
 
@@ -199,13 +202,16 @@ class UpdateSettingsIn(BaseModel):
 def update_settings(
     body: UpdateSettingsIn,
     org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
     _admin=Depends(require_admin),
     db: Session = Depends(db_dep),
 ) -> dict:
     settings_row = _get_or_create_settings(db, org.id)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    changed = body.model_dump(exclude_unset=True)
+    for field, value in changed.items():
         setattr(settings_row, field, value)
     db.commit()
+    _record_audit(db, org.id, user.id, "pr_review_settings.updated", "PR review settings", changed)
     return _serialize_settings(settings_row)
 
 

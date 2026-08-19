@@ -41,6 +41,7 @@ import os
 import random
 import uuid
 from . import crypto, models
+from .audit import record_audit
 from .db import SessionLocal
 from .settings import settings
 from .time_utils import utcnow
@@ -97,6 +98,7 @@ async def _run_pentest(pentest_id: str) -> None:
         pentest.status = "running"
         pentest.started_at = utcnow()
         db.commit()
+        record_audit(db, pentest.org_id, pentest.created_by, "pentest.started", pentest.target_label, {"scan_mode": pentest.scan_mode})
 
         llm_settings = db.get(models.OrgLlmSettings, pentest.org_id)
 
@@ -150,12 +152,16 @@ async def _run_pentest(pentest_id: str) -> None:
                     domain.last_tested_at = pentest.finished_at
 
             db.commit()
+            record_audit(
+                db, pentest.org_id, pentest.created_by, "pentest.completed", pentest.target_label, {"severity_counts": severity_counts}
+            )
         except Exception:  # noqa: BLE001 - a scan/processing bug must not strand the pentest in "running" forever
             logger.exception("scan failed for pentest %s", pentest.id)
             db.rollback()
             pentest.status = "failed"
             pentest.finished_at = utcnow()
             db.commit()
+            record_audit(db, pentest.org_id, pentest.created_by, "pentest.failed", pentest.target_label)
     finally:
         db.close()
 

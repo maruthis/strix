@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..deps import current_org, current_user, db_dep, require_admin
-from .orgs import _record_audit
+from ..audit import record_audit as _record_audit
 from .pentests import create_and_enqueue_pentest
 
 router = APIRouter(prefix="/api/domains", tags=["domains"])

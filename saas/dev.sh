@@ -52,6 +52,17 @@ if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
   (cd "$FRONTEND_DIR" && npm install)
 fi
 
+if command -v chflags >/dev/null; then
+  # macOS-only: something (observed to recur even without any uv sync in
+  # between — likely Spotlight/Time Machine indexing underscore-prefixed
+  # files) intermittently sets UF_HIDDEN on uv's generated editable-install
+  # `.pth` files. Python 3.12's site.py silently *skips* hidden .pth files,
+  # which breaks `import strix` (and any other editable dependency) with no
+  # error — it just isn't on sys.path. Clearing the flag is a harmless noop
+  # when it's already unset.
+  chflags nohidden "$BACKEND_DIR"/.venv/lib/python3.*/site-packages/*.pth 2>/dev/null || true
+fi
+
 if [ ! -f "$BACKEND_DIR/strix_saas.db" ]; then
   echo "==> Seeding demo data"
   (cd "$BACKEND_DIR" && uv run --no-sync python -m app.seed)

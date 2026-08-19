@@ -361,6 +361,26 @@ class AuditLogEntry(TimestampMixin, Base):
     extra: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class RequestLogEntry(TimestampMixin, Base):
+    """Best-effort HTTP activity log, written by app.middleware.RequestLogMiddleware.
+
+    Only mutating requests (non-GET) and error responses (status >= 400) are
+    recorded — logging every routine polling GET would flood this table with
+    near-zero audit value (e.g. the pentest list alone polls every 4s per
+    open tab).
+    """
+
+    __tablename__ = "request_log_entries"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    org_id: Mapped[str | None] = mapped_column(ForeignKey("organizations.id"), nullable=True, index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    method: Mapped[str] = mapped_column(String)
+    path: Mapped[str] = mapped_column(String)
+    status_code: Mapped[int] = mapped_column(Integer)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
 

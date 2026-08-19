@@ -210,11 +210,46 @@ export interface Subscription {
 
 export interface AuditLogEntry {
   id: string;
+  actor_user_id: string | null;
   actor_email: string;
   action: string;
   target: string;
   extra: Record<string, unknown>;
   created_at: string;
+}
+
+export interface RequestLogEntry {
+  id: string;
+  actor_email: string;
+  method: string;
+  path: string;
+  status_code: number;
+  duration_ms: number;
+  created_at: string;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface PentestLogLine {
+  ts: string;
+  level: string;
+  scan_id: string;
+  agent_id: string;
+  logger: string;
+  message: string;
+}
+
+export interface PentestLogsResponse {
+  available: boolean;
+  lines: PentestLogLine[];
+  total_lines: number;
+  total_matched: number;
+  agent_ids: string[];
 }
 
 export interface Invitation {

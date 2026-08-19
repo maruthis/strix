@@ -69,6 +69,20 @@ def test_dns_and_connection_errors_are_transient() -> None:
     assert execution._is_transient_model_error(TimeoutError("timed out")) is True
 
 
+def test_httpx_transport_errors_are_transient() -> None:
+    assert (
+        execution._is_transient_model_error(
+            httpx.RemoteProtocolError(
+                "peer closed connection without sending complete message body "
+                "(incomplete chunked read)"
+            )
+        )
+        is True
+    )
+    assert execution._is_transient_model_error(httpx.ReadError("read failed")) is True
+    assert execution._is_transient_model_error(httpx.ConnectError("connect failed")) is True
+
+
 def test_content_guardrail_is_not_retried() -> None:
     guardrail = APIError(
         "This content was flagged for possible cybersecurity risk",

@@ -5,7 +5,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..deps import current_org, db_dep, require_admin
+from ..audit import record_audit as _record_audit
+from ..deps import current_org, current_user, db_dep, require_admin
 
 router = APIRouter(prefix="/api/settings/webhooks", tags=["settings"])
 
@@ -39,12 +40,14 @@ class NewWebhookIn(BaseModel):
 def create_webhook(
     body: NewWebhookIn,
     org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
     _admin=Depends(require_admin),
     db: Session = Depends(db_dep),
 ) -> dict:
     webhook = models.Webhook(org_id=org.id, url=body.url, events=body.events)
     db.add(webhook)
     db.commit()
+    _record_audit(db, org.id, user.id, "webhook.created", webhook.url, {"events": webhook.events})
     return {**_serialize(webhook), "secret": webhook.secret}
 
 
@@ -52,12 +55,15 @@ def create_webhook(
 def delete_webhook(
     webhook_id: str,
     org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
     _admin=Depends(require_admin),
     db: Session = Depends(db_dep),
 ) -> dict:
     webhook = db.get(models.Webhook, webhook_id)
     if not webhook or webhook.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    url = webhook.url
     db.delete(webhook)
     db.commit()
+    _record_audit(db, org.id, user.id, "webhook.deleted", url)
     return {"ok": True}

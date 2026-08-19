@@ -5,7 +5,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..deps import current_org, db_dep
+from ..audit import record_audit as _record_audit
+from ..deps import current_org, current_user, db_dep
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -48,6 +49,7 @@ class NewKnowledgeIn(BaseModel):
 def add_knowledge(
     body: NewKnowledgeIn,
     org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
     db: Session = Depends(db_dep),
 ) -> dict:
     if not body.description.strip():
@@ -61,16 +63,24 @@ def add_knowledge(
     )
     db.add(entry)
     db.commit()
+    _record_audit(db, org.id, user.id, "knowledge.added", entry.description[:80])
     return _serialize(entry)
 
 
 @router.delete("/{entry_id}")
-def delete_knowledge(entry_id: str, org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> dict:
+def delete_knowledge(
+    entry_id: str,
+    org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
+    db: Session = Depends(db_dep),
+) -> dict:
     entry = db.get(models.KnowledgeEntry, entry_id)
     if not entry or entry.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    description = entry.description[:80]
     db.delete(entry)
     db.commit()
+    _record_audit(db, org.id, user.id, "knowledge.deleted", description)
     return {"ok": True}
 
 

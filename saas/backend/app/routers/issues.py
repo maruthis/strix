@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..deps import current_org, current_user, db_dep
-from .orgs import _record_audit
+from ..audit import record_audit as _record_audit
 
 router = APIRouter(prefix="/api/issues", tags=["issues"])
 

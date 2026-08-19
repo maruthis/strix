@@ -130,10 +130,13 @@ describe("IssuesList", () => {
     renderWithProviders(<IssuesList />);
     await screen.findByText("SQL injection");
 
+    await userEvent.click(screen.getByRole("button", { name: "Filter by repository" }));
     expect(screen.getByRole("option", { name: "All Repositories" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "acme/widgets" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter by pentest" }));
     expect(screen.getByRole("option", { name: "All Pentests" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /acme\/widgets ·/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /p1 · acme\/widgets ·/ })).toBeInTheDocument();
   });
 
   it("refetches issues scoped to the selected repository", async () => {
@@ -141,7 +144,8 @@ describe("IssuesList", () => {
     renderWithProviders(<IssuesList />);
     await screen.findByText("SQL injection");
 
-    await userEvent.selectOptions(screen.getByDisplayValue("All Repositories"), "r1");
+    await userEvent.click(screen.getByRole("button", { name: "Filter by repository" }));
+    await userEvent.click(screen.getByRole("option", { name: "acme/widgets" }));
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("repository_id=r1"))).toBe(true);
@@ -153,7 +157,8 @@ describe("IssuesList", () => {
     renderWithProviders(<IssuesList />);
     await screen.findByText("SQL injection");
 
-    await userEvent.selectOptions(screen.getByDisplayValue("All Pentests"), "p1");
+    await userEvent.click(screen.getByRole("button", { name: "Filter by pentest" }));
+    await userEvent.click(screen.getByRole("option", { name: /p1 · acme\/widgets ·/ }));
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("pentest_id=p1"))).toBe(true);
