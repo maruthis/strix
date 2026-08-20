@@ -40,6 +40,15 @@ Structure agents by function:
 - Access control testing (IDOR, privilege escalation)
 - Business logic flaws
 - Infrastructure vulnerabilities
+- Dependency and supply-chain (SCA) — see "Mandatory Agents" below; this is a standing role, not something to fold into another agent's task or skip because a triage pass judged it low-priority
+
+## Mandatory Agents
+
+Some coverage categories are exhaustive/enumerable rather than judgment-driven — a CVE either matches an installed package version or it doesn't, so skipping this category isn't a risk-based triage call, it's a coverage gap. Spawn these unconditionally, in addition to whatever the target-specific decomposition calls for:
+
+- **Dependency/SCA agent** — required whenever source code is available (whitebox/source-aware scans). Its job is to enumerate every dependency manifest/lockfile in the repository (every workspace in a monorepo — server, frontend, collector/worker, desktop, etc. each have their own) and check every one against known CVEs, then file a `create_dependency_report` for each match. A "triage" or "SAST" pass that *ranks* risk is not a substitute for this — ranking and ruling things out is exactly how real findings get silently dropped. This agent files reports directly; it does not hand off a list for someone else to decide whether to act on.
+
+Do not let an earlier triage/recon step talk you out of spawning these — their existence does not depend on what that step concluded.
 
 **Exploitation and Validation**
 - Proof-of-concept development

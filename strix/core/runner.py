@@ -158,6 +158,20 @@ async def run_strix_scan(
     teardown_logging = setup_scan_logging(run_dir)
     set_scan_id(scan_id)
 
+    agents_path = state_dir / "agents.json"
+    agents_db = state_dir / "agents.db"
+    is_resume = agents_path.exists()
+
+    logger.info(
+        "%s Strix scan %s (image=%s, max_turns=%d, interactive=%s, run_dir=%s)",
+        "Resuming" if is_resume else "Starting",
+        scan_id,
+        image,
+        max_turns,
+        interactive,
+        run_dir,
+    )
+
     # CLI/TUI callers construct a ReportState and register it via
     # set_global_report_state() themselves before calling run_strix_scan();
     # a bare library caller (e.g. an integration embedding the engine) has
@@ -176,20 +190,6 @@ async def run_strix_scan(
         report_state.set_scan_config(scan_config)
         report_state.save_run_data()
         set_global_report_state(report_state)
-
-    agents_path = state_dir / "agents.json"
-    agents_db = state_dir / "agents.db"
-    is_resume = agents_path.exists()
-
-    logger.info(
-        "%s Strix scan %s (image=%s, max_turns=%d, interactive=%s, run_dir=%s)",
-        "Resuming" if is_resume else "Starting",
-        scan_id,
-        image,
-        max_turns,
-        interactive,
-        run_dir,
-    )
 
     settings = load_settings()
     configure_sdk_model_defaults(settings)
