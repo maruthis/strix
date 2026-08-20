@@ -58,6 +58,7 @@ export interface Pentest {
   target_type: "repository" | "domain";
   target_id: string;
   target_label: string;
+  extra_domain_id: string | null;
   scan_mode: string;
   status: PentestStatus;
   started_at: string | null;

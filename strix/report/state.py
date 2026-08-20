@@ -101,6 +101,18 @@ def set_global_report_state(report_state: "ReportState") -> None:
     streamed_openrouter_costs.clear()
 
 
+def reset_global_report_state() -> None:
+    """Clear the registered report state once a scan is done.
+
+    Needed by callers that run more than one scan per process (e.g. a
+    long-lived host embedding ``run_strix_scan`` as a library): without
+    this, the next scan's findings would keep landing in the previous
+    scan's ``ReportState``/run directory instead of getting their own.
+    """
+    global _global_report_state  # noqa: PLW0603
+    _global_report_state = None
+
+
 class ReportState:
     """Per-scan product artifact state plus artifact writer.
 

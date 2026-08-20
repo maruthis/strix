@@ -1307,8 +1307,21 @@ def assign_workspace_subdirs(targets_info: list[dict[str, Any]]) -> None:
 
 
 def is_whitebox_scan(targets_info: list[dict[str, Any]]) -> bool:
-    """True iff any target is a local source tree (whitebox / source-aware)."""
-    return any(t.get("type") == "local_code" for t in targets_info or [])
+    """True iff any target is a local source tree (whitebox / source-aware).
+
+    Mirrors :func:`collect_local_sources`'s notion of "local" — a plain
+    ``local_code`` target, or a ``repository`` target that was cloned to
+    disk (``cloned_repo_path`` present in ``details``). Both give the
+    agent an actual checked-out source tree, not just a live URL.
+    """
+    for t in targets_info or []:
+        details = t.get("details") or {}
+        ttype = t.get("type")
+        if ttype == "local_code":
+            return True
+        if ttype == "repository" and "cloned_repo_path" in details:
+            return True
+    return False
 
 
 def collect_local_sources(targets_info: list[dict[str, Any]]) -> list[dict[str, Any]]:

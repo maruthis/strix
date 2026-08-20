@@ -41,7 +41,13 @@ from strix.core.inputs import (
 )
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.core.sessions import open_agent_session
-from strix.report.state import get_global_report_state
+from strix.interface.utils import is_whitebox_scan
+from strix.report.state import (
+    ReportState,
+    get_global_report_state,
+    reset_global_report_state,
+    set_global_report_state,
+)
 from strix.runtime import session_manager
 from strix.telemetry.logging import set_scan_id, setup_scan_logging
 from strix.tools.output_store import (
@@ -152,6 +158,25 @@ async def run_strix_scan(
     teardown_logging = setup_scan_logging(run_dir)
     set_scan_id(scan_id)
 
+    # CLI/TUI callers construct a ReportState and register it via
+    # set_global_report_state() themselves before calling run_strix_scan();
+    # a bare library caller (e.g. an integration embedding the engine) has
+    # no other opportunity to do so, and without one every
+    # create_vulnerability_report / finish_scan call silently no-ops (see
+    # their "No global report state" warnings) — the scan runs to
+    # completion and reports zero findings regardless of what the agents
+    # actually found. Bootstrap one here iff nothing is already registered,
+    # and tear only that down afterward so we never interfere with a
+    # caller managing its own report_state lifecycle.
+    report_state = get_global_report_state()
+    owns_report_state = report_state is None
+    if owns_report_state:
+        report_state = ReportState(scan_id)
+        report_state.hydrate_from_run_dir()
+        report_state.set_scan_config(scan_config)
+        report_state.save_run_data()
+        set_global_report_state(report_state)
+
     agents_path = state_dir / "agents.json"
     agents_db = state_dir / "agents.db"
     is_resume = agents_path.exists()
@@ -253,11 +278,12 @@ async def run_strix_scan(
     configure_spill_writer(_spill_to_workspace)
 
     sessions_to_close: list[SQLiteSession] = []
+    report_final_status = "stopped"
 
     try:
         targets = scan_config.get("targets") or []
         scan_mode = str(scan_config.get("scan_mode") or "deep")
-        is_whitebox = any(t.get("type") == "local_code" for t in targets)
+        is_whitebox = is_whitebox_scan(targets)
         skills = list(scan_config.get("skills") or [])
         root_task = build_root_task(scan_config)
         model_settings = make_model_settings(
@@ -452,17 +478,27 @@ async def run_strix_scan(
         return None
     except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("Scan %s interrupted by the user", scan_id)
+        report_final_status = "interrupted"
         if root_id is not None:
             with contextlib.suppress(Exception):
                 await coordinator.set_status(root_id, "running")
         raise
     except BaseException:
         logger.exception("Strix scan %s failed", scan_id)
+        report_final_status = "failed"
         if root_id is not None:
             with contextlib.suppress(Exception):
                 await coordinator.set_status(root_id, "failed")
         raise
     finally:
+        if owns_report_state and report_state is not None:
+            # Mirrors the CLI's atexit/signal cleanup handlers, which only
+            # exist for the CLI's own process lifecycle. cleanup()'s status
+            # is a no-op once finish_scan has already marked the run
+            # "completed", so this never downgrades a genuinely finished scan.
+            with contextlib.suppress(Exception):
+                report_state.cleanup(status=report_final_status)
+            reset_global_report_state()
         configure_spill_writer(None)
         # Settle descendants before closing sessions: on a clean finish a child
         # can still be mid-turn, and closing its session underneath it crashes it.

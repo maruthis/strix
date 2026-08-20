@@ -149,6 +149,12 @@ class Pentest(TimestampMixin, Base):
     target_type: Mapped[str] = mapped_column(String)  # repository | domain
     target_id: Mapped[str] = mapped_column(String)
     target_label: Mapped[str] = mapped_column(String, default="")
+    # Only meaningful when target_type == "repository": an optional verified
+    # Domain to also test live/dynamically in the same run, alongside the
+    # source-only (whitebox) scan of the repository — e.g. auth flows, CORS,
+    # cookie flags, and other findings that only exist on a deployed
+    # instance and can't be seen from source alone.
+    extra_domain_id: Mapped[str | None] = mapped_column(ForeignKey("domains.id"), nullable=True)
     scan_mode: Mapped[str] = mapped_column(String, default="deep")
     status: Mapped[str] = mapped_column(String, default="queued")  # queued|running|completed|failed|stopped
     schedule_id: Mapped[str | None] = mapped_column(ForeignKey("pentest_schedules.id"), nullable=True)

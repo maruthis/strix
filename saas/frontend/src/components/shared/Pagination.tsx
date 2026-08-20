@@ -14,7 +14,9 @@ export function Pagination({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   if (totalPages <= 1) return null;
 
-  const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  // total === 0 always yields totalPages <= 1 above (ceil(0/pageSize) = 0),
+  // so by this point total is guaranteed positive.
+  const start = (page - 1) * pageSize + 1;
   const end = Math.min(page * pageSize, total);
 
   return (
@@ -25,6 +27,7 @@ export function Pagination({
       <div className="flex items-center gap-1">
         <button
           type="button"
+          aria-label="Previous page"
           disabled={page <= 1}
           onClick={() => onChange(page - 1)}
           className="rounded-md p-1.5 text-[#888] hover:bg-[rgba(255,255,255,0.06)] hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
@@ -36,6 +39,7 @@ export function Pagination({
         </span>
         <button
           type="button"
+          aria-label="Next page"
           disabled={page >= totalPages}
           onClick={() => onChange(page + 1)}
           className="rounded-md p-1.5 text-[#888] hover:bg-[rgba(255,255,255,0.06)] hover:text-white disabled:cursor-not-allowed disabled:opacity-30"

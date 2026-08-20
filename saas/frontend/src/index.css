@@ -61,3 +61,18 @@ body {
 .fade-in {
   animation: fade-in 150ms ease-out;
 }
+
+@keyframes indeterminate-bar {
+  0% {
+    transform: translateX(-60%) scaleX(0.4);
+  }
+  50% {
+    transform: translateX(20%) scaleX(0.6);
+  }
+  100% {
+    transform: translateX(120%) scaleX(0.4);
+  }
+}
+.animate-indeterminate-bar {
+  animation: indeterminate-bar 1.4s ease-in-out infinite;
+}

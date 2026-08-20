@@ -14,6 +14,7 @@ from strix.interface.utils import (
     collect_local_sources,
     dedupe_local_targets,
     infer_target_type,
+    is_whitebox_scan,
     read_target_list_file,
 )
 from strix.runtime.session_manager import build_bind_mounts
@@ -43,6 +44,38 @@ def test_collect_local_sources_leaves_a_clone_writable() -> None:
     assert sources == [
         {"source_path": "/clone", "workspace_subdir": "clone", "protect_metadata": False}
     ]
+
+
+def test_is_whitebox_scan_true_for_local_code() -> None:
+    assert is_whitebox_scan([_local_target("/code")]) is True
+
+
+def test_is_whitebox_scan_true_for_a_cloned_repository() -> None:
+    # A "repository" target that was cloned to disk (cloned_repo_path
+    # present) gets mounted into the sandbox by collect_local_sources just
+    # like a local_code target does, so it must count as whitebox too —
+    # otherwise the agent never loads the source-aware skill even though
+    # it has the checked-out source tree available.
+    repo = {
+        "type": "repository",
+        "details": {"cloned_repo_path": "/clone", "workspace_subdir": "clone"},
+    }
+    assert is_whitebox_scan([repo]) is True
+
+
+def test_is_whitebox_scan_false_for_a_repository_target_without_a_clone() -> None:
+    repo = {"type": "repository", "details": {"target_repo": "org/repo"}}
+    assert is_whitebox_scan([repo]) is False
+
+
+def test_is_whitebox_scan_false_for_a_web_application_target() -> None:
+    web = {"type": "web_application", "details": {"target_url": "https://example.com"}}
+    assert is_whitebox_scan([web]) is False
+
+
+def test_is_whitebox_scan_false_for_no_targets() -> None:
+    assert is_whitebox_scan([]) is False
+    assert is_whitebox_scan(None) is False  # type: ignore[arg-type]
 
 
 def test_check_mountable_dir_accepts_a_project_dir(tmp_path: Path) -> None:

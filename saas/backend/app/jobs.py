@@ -206,6 +206,14 @@ async def _build_scan_targets(db, pentest: models.Pentest) -> tuple[list[dict], 
     first (source-aware/whitebox scanning — the engine reads the actual
     checked-out code, not just a URL); a domain target is a live web
     application URL, no local checkout needed.
+
+    A repository target may also carry `extra_domain_id` (see
+    models.Pentest) — a verified live domain to test *in the same run*
+    alongside the source checkout. strix's `targets` is always a list, so
+    this is just a second entry: the engine gets both a local source tree
+    (whitebox skill loads) and a live URL (auth-flow/CORS/cookie/etc.
+    findings that only exist on a deployed instance), matching what a
+    combined source-review-plus-dynamic-testing engagement covers.
     """
     if pentest.target_type == "repository":
         repo = db.get(models.Repository, pentest.target_id)
@@ -231,6 +239,17 @@ async def _build_scan_targets(db, pentest: models.Pentest) -> tuple[list[dict], 
         local_sources = [
             {"source_path": cloned_path, "workspace_subdir": repo.full_name.split("/")[-1], "protect_metadata": False}
         ]
+
+        if pentest.extra_domain_id:
+            extra_domain = db.get(models.Domain, pentest.extra_domain_id)
+            if extra_domain is not None:
+                targets.append(
+                    {
+                        "type": "web_application",
+                        "details": {"target_url": f"https://{extra_domain.hostname}"},
+                    }
+                )
+
         return targets, local_sources
 
     if pentest.target_type == "domain":
