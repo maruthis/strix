@@ -141,6 +141,7 @@ function IssueRow({ issue }: { issue: Issue }) {
         {issue.source === "baseline_scan" && (
           <StatusPill value="baseline_scan" label="Automatically detected" />
         )}
+        {issue.source === "mock_fallback" && <StatusPill value="mock_fallback" label="Mock fallback" />}
       </div>
     </Link>
   );

@@ -1,7 +1,7 @@
 <p align="center">
-  <a href="https://strix.ai/">
-    <img src="https://github.com/usestrix/.github/raw/main/imgs/cover.png" alt="Strix Banner" width="100%">
-  </a>
+  
+  <img src="https://github.com/usestrix/.github/raw/main/imgs/cover.png" alt="Strix Banner" width="100%">
+  
 </p>
 
 <div align="center">
@@ -12,29 +12,11 @@
 
 <br/>
 
-
-<a href="https://docs.strix.ai"><img src="https://img.shields.io/badge/Docs-docs.strix.ai-2b9246?style=for-the-badge&logo=gitbook&logoColor=white" alt="Docs"></a>
-<a href="https://strix.ai"><img src="https://img.shields.io/badge/Website-strix.ai-f0f0f0?style=for-the-badge&logoColor=000000" alt="Website"></a>
-[![](https://dcbadge.limes.pink/api/server/strix-ai)](https://discord.gg/strix-ai)
-
-<a href="https://deepwiki.com/usestrix/strix"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-<a href="https://github.com/usestrix/strix"><img src="https://img.shields.io/github/stars/usestrix/strix?style=flat-square" alt="GitHub Stars"></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-3b82f6?style=flat-square" alt="License"></a>
-<a href="https://pypi.org/project/strix-agent/"><img src="https://img.shields.io/pypi/v/strix-agent?style=flat-square" alt="PyPI Version"></a>
-
-
-<a href="https://discord.gg/strix-ai"><img src="https://github.com/usestrix/.github/raw/main/imgs/Discord.png" height="40" alt="Join Discord"></a>
-<a href="https://x.com/strix_ai"><img src="https://github.com/usestrix/.github/raw/main/imgs/X.png" height="40" alt="Follow on X"></a>
-
-
-<a href="https://trendshift.io/repositories/15362?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-15362" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/15362/weekly" alt="usestrix%2Fstrix | Trendshift" width="250" height="55"/></a>
-<a href="https://trendshift.io/repositories/15362" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15362" alt="usestrix/strix | Trendshift" width="250" height="55"/></a>
-
 </div>
 
 
 > [!TIP]
-> **New!** Strix integrates seamlessly with GitHub Actions and CI/CD pipelines. Automatically scan for vulnerabilities on every pull request and block insecure code before it reaches production - [Get started with no setup required](https://app.strix.ai).
+> Strix integrates seamlessly with GitHub Actions and CI/CD pipelines. Automatically scan for vulnerabilities on every pull request and block insecure code before it reaches production - see [CI/CD (GitHub Actions)](#cicd-github-actions) below, or run the full dashboard yourself with [`saas/dev.sh`](#-developer-environment-setup) for scheduled/managed scanning.
 
 ---
 
@@ -56,9 +38,7 @@ Strix are autonomous AI penetration testing agents that act just like real hacke
 
 
 <div align="center">
-  <a href="https://strix.ai">
-    <img src=".github/screenshot.png" alt="Strix Demo" width="1000" style="border-radius: 16px;">
-  </a>
+  <img src=".github/screenshot.png" alt="Strix Demo" width="1000" style="border-radius: 16px;">
 </div>
 
 
@@ -73,13 +53,13 @@ Strix are autonomous AI penetration testing agents that act just like real hacke
 
 **Prerequisites:**
 - Docker (running)
-- An LLM API key from any [supported provider](https://docs.strix.ai/llm-providers/overview) (OpenAI, Anthropic, Google, etc.)
+- An LLM API key from any [supported provider](docs/llm-providers/overview.mdx) (OpenAI, Anthropic, Google, etc.)
 
 ### Installation & First Scan
 
 ```bash
-# Install Strix
-curl -sSL https://strix.ai/install | bash
+# Install Strix (this fork, not the upstream package)
+pip install "strix-agent @ git+https://github.com/maruthis/strix"
 
 # Configure your AI provider
 export STRIX_LLM="openai/gpt-5.4"
@@ -92,11 +72,33 @@ strix --target ./app-directory
 > [!NOTE]
 > First run automatically pulls the sandbox Docker image. Results are saved to `strix_runs/<run-name>`
 
+### Or: run the full SaaS dashboard
+
+Want the multi-tenant dashboard (org accounts, connected repos/domains,
+scheduled scans, PR reviews, Chat) instead of the bare CLI? One command
+brings up both the backend and frontend together:
+
+```bash
+saas/dev.sh
+```
+
+This installs backend (`uv sync`) and frontend (`npm install`) dependencies
+on first run, then starts the API on `:8000` and the dashboard on `:5173`
+— `Ctrl-C` stops both. It runs against the mock scanner by default (no
+Docker/LLM key needed to explore the UI); set `SAAS_ENABLE_REAL_SCAN=1` in
+`saas/backend/.env` once you want it to run genuine scans through this
+same engine. See [Developer Environment Setup](#-developer-environment-setup)
+below for the full picture, or [`saas/README.md`](saas/README.md) directly.
+
 ---
 
 ## ☁️ Strix Platform
 
-Try the Strix full-stack penetration testing platform at **[app.strix.ai](https://app.strix.ai)** - sign up for free, connect your repos and domains, and launch a pentest in minutes.
+This repo includes the full-stack penetration testing platform's source under
+[`saas/`](saas/) — a multi-tenant dashboard you self-host rather than a
+service this fork operates. Deploy it wherever you like (e.g.
+`<servername>.strix.ai`, or any domain/subdomain you control), sign in,
+connect your repos and domains, and launch a pentest in minutes.
 
 - **Validated findings with PoCs** - every vulnerability includes a working proof-of-concept exploit and reproduction steps
 - **One-click autofix** - AI-generated security patches as ready-to-merge pull requests
@@ -104,7 +106,7 @@ Try the Strix full-stack penetration testing platform at **[app.strix.ai](https:
 - **DevSecOps integrations** - GitHub, GitLab, Bitbucket, Slack, Jira, Linear, and CI/CD pipelines
 - **Continuous learning** - AI that builds on past findings, adapts to your codebase, and reduces false positives over time
 
-[**Start your first pentest →**](https://app.strix.ai)
+**[Run it locally with `saas/dev.sh` →](#-developer-environment-setup)** or see [`saas/README.md`](saas/README.md) for deploying your own instance.
 
 ---
 
@@ -271,7 +273,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Strix
-        run: curl -sSL https://strix.ai/install | bash
+        run: pip install "strix-agent @ git+https://github.com/maruthis/strix"
 
       - name: Run Strix
         env:
@@ -321,19 +323,83 @@ strix auth logout             # forget the sign-in
 - [Anthropic Claude Sonnet 4.6](https://claude.com/platform/api) - `anthropic/claude-sonnet-4-6`
 - [Google Gemini 3 Pro Preview](https://cloud.google.com/vertex-ai) - `vertex_ai/gemini-3-pro-preview`
 
-See the [LLM Providers documentation](https://docs.strix.ai/llm-providers/overview) for all supported providers including Vertex AI, Bedrock, Azure, and local models.
+See the [LLM Providers documentation](docs/llm-providers/overview.mdx) for all supported providers including Vertex AI, Bedrock, Azure, and local models.
 
 ## Enterprise Pentesting
 
-Get the same Strix experience with [enterprise-grade](https://strix.ai/demo) controls: SSO (SAML/OIDC), custom compliance-ready penetration testing reports (SOC 2, ISO 27001, PCI DSS), dedicated support & SLA, custom deployment options (VPC/self-hosted), BYOK model support, and tailored AI pentesting agents optimized for your environment. [Learn more](https://strix.ai/demo).
+`saas/` is already built for this: multi-tenant orgs with role-based
+access, custom compliance-ready penetration testing reports, GitHub/GitLab
+integrations, BYOK model support (per-org LLM settings), and self-hosted
+deployment by construction (there's no hosted version to opt out of). See
+[`docs/saas-architecture.md`](docs/saas-architecture.md) for how it's put
+together, and [`saas/README.md`](saas/README.md) to deploy your own
+instance (e.g. at `<servername>.strix.ai`) with SSO/VPC controls layered
+on however your infrastructure normally handles that.
 
 ## Documentation
 
-Full documentation is available at **[docs.strix.ai](https://docs.strix.ai)** - including detailed guides for usage, CI/CD integrations, skills, and advanced configuration.
+Full documentation is available under [`docs/`](docs/) in this repository
+— including detailed guides for usage, CI/CD integrations, skills, and
+advanced configuration. Start at [`docs/README.md`](docs/README.md) or
+[`docs/quickstart.mdx`](docs/quickstart.mdx).
+
+## 🛠️ Developer Environment Setup
+
+Two things live in this repo — the `strix` engine (Python CLI/library) and
+`saas/` (the multi-tenant dashboard built on top of it) — each with its
+own setup.
+
+### Engine (`strix/`)
+
+```bash
+git clone https://github.com/maruthis/strix.git
+cd strix
+
+make dev-install     # uv sync + dev dependencies
+make check-all        # ruff format/lint, mypy, pyright, bandit
+uv run pytest          # run the test suite
+uv run strix --target ./some-project   # run from source
+```
+
+Requires Python 3.12+ and [`uv`](https://docs.astral.sh/uv/). `make
+setup-dev` also installs the pre-commit hooks. See
+[`AGENTS.md`](AGENTS.md)'s "Contributing to this repo" section and
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide, and
+[`docs/strix-engine-architecture.md`](docs/strix-engine-architecture.md)
+for how the engine itself is structured.
+
+### SaaS dashboard (`saas/`)
+
+The fastest way to get the backend and frontend running together:
+
+```bash
+saas/dev.sh
+```
+
+What it does (see the script's own header comment for the full detail):
+
+- Installs backend deps (`uv sync`, in `saas/backend/`) and frontend deps
+  (`npm install`, in `saas/frontend/`) on first run.
+- Starts the FastAPI backend on `:8000` and the Vite dev server on
+  `:5173`, and stops both together on `Ctrl-C`.
+- Auto-loads `saas/backend/.env` (gitignored — copy it from
+  `saas/backend/.env.example`) before doing anything else, so you don't
+  have to re-export environment variables every run.
+- Runs against the built-in mock scanner by default — no Docker or LLM
+  key needed just to explore the UI. Set `SAAS_ENABLE_REAL_SCAN=1` in
+  that `.env` file (and a Docker + `STRIX_LLM`/`LLM_API_KEY` setup, same
+  as the engine above) to run genuine scans through this same engine
+  instead of canned findings.
+
+Requires `uv` and `npm`/Node.js. Prerequisites, environment variables,
+manual (non-`dev.sh`) startup, and the backend test suite are all covered
+in [`saas/README.md`](saas/README.md) and [`saas/CONFIG.md`](saas/CONFIG.md);
+[`docs/saas-architecture.md`](docs/saas-architecture.md) covers how the
+backend, frontend, and data model fit together.
 
 ## Contributing
 
-We welcome contributions of code, docs, and new skills - check out our [Contributing Guide](https://docs.strix.ai/contributing) to get started or open a [pull request](https://github.com/usestrix/strix/pulls)/[issue](https://github.com/usestrix/strix/issues).
+We welcome contributions of code, docs, and new skills - check out our [Contributing Guide](docs/contributing.mdx) to get started or open a [pull request](https://github.com/maruthis/strix/pulls)/[issue](https://github.com/maruthis/strix/issues).
 
 ## Join Our Community
 

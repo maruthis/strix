@@ -12,6 +12,7 @@ _TMP_DB.close()
 os.environ["SAAS_DATABASE_URL"] = f"sqlite:///{_TMP_DB.name}"
 os.environ["SAAS_DEV_MODE"] = "1"
 os.environ["SAAS_SESSION_SECRET"] = "test-secret"
+os.environ["SAAS_CREDENTIALS_ENCRYPTION_KEY"] = "test-encryption-key"
 os.environ["SAAS_FRONTEND_ORIGIN"] = "http://testserver"
 os.environ["SAAS_MOCK_SCAN_MIN_SECONDS"] = "0.01"
 os.environ["SAAS_MOCK_SCAN_MAX_SECONDS"] = "0.02"

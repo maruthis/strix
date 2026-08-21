@@ -38,7 +38,7 @@ security-scan:
     STRIX_LLM: $STRIX_LLM
     LLM_API_KEY: $LLM_API_KEY
   script:
-    - curl -sSL https://strix.ai/install | bash
+    - pip install "strix-agent @ git+https://github.com/maruthis/strix"
     - strix -n -t ./ --scan-mode quick
 ```
 
@@ -54,7 +54,7 @@ pipeline {
     stages {
         stage('Security Scan') {
             steps {
-                sh 'curl -sSL https://strix.ai/install | bash'
+                sh 'pip install "strix-agent @ git+https://github.com/maruthis/strix"'
                 sh 'strix -n -t ./ --scan-mode quick'
             }
         }
@@ -75,7 +75,7 @@ jobs:
       - setup_remote_docker
       - run:
           name: Install Strix
-          command: curl -sSL https://strix.ai/install | bash
+          command: pip install "strix-agent @ git+https://github.com/maruthis/strix"
       - run:
           name: Run Scan
           command: strix -n -t ./ --scan-mode quick

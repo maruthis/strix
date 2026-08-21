@@ -60,6 +60,7 @@ export default function IssueDetail() {
             {issue.source === "baseline_scan" && (
               <StatusPill value="baseline_scan" label="Automatically detected" />
             )}
+            {issue.source === "mock_fallback" && <StatusPill value="mock_fallback" label="Mock fallback" />}
             {issue.cvss !== null && <span className="text-xs text-[#666]">CVSS {issue.cvss.toFixed(1)}</span>}
           </div>
           <h1 className="text-lg font-semibold text-white">{issue.title}</h1>

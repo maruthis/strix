@@ -89,6 +89,7 @@ export interface Pentest {
   started_at: string | null;
   finished_at: string | null;
   severity_counts: Record<string, number>;
+  mock_fallback_reason: string | null;
   created_at: string;
 }
 

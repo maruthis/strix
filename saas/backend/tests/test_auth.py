@@ -32,6 +32,77 @@ def test_me_requires_session(client):
     assert res.json()["detail"] == "not_authenticated"
 
 
+def test_login_sets_a_server_side_session_expiry(client):
+    from datetime import timedelta
+
+    from app import models
+    from app.db import SessionLocal
+    from app.time_utils import utcnow
+
+    otp_login(client, "expiry-check@example.com")
+
+    db = SessionLocal()
+    try:
+        sess = db.query(models.Session_).filter_by(user_id=db.query(models.User).filter_by(email="expiry-check@example.com").first().id).first()
+        assert sess.expires_at is not None
+        # ~30 days out (auth.py's SESSION_TTL) — a loose bound so this
+        # doesn't break if that constant's exact value ever changes.
+        assert timedelta(days=25) < (sess.expires_at - utcnow()) < timedelta(days=35)
+    finally:
+        db.close()
+
+
+def test_expired_session_is_rejected_and_deleted(client):
+    from datetime import timedelta
+
+    from app import models
+    from app.db import SessionLocal
+    from app.time_utils import utcnow
+
+    otp_login(client, "expired@example.com")
+    token = client.cookies.get("strix_saas_session")
+
+    db = SessionLocal()
+    try:
+        sess = db.get(models.Session_, token)
+        sess.expires_at = utcnow() - timedelta(days=1)
+        db.commit()
+    finally:
+        db.close()
+
+    res = client.get("/api/auth/me")
+    assert res.status_code == 401
+    assert res.json()["detail"] == "session_expired"
+
+    db = SessionLocal()
+    try:
+        assert db.get(models.Session_, token) is None
+    finally:
+        db.close()
+
+
+def test_session_predating_the_expiry_column_still_works(client):
+    """A session row with expires_at=None (created before this column
+    existed) is a one-time adoption allowance, not an ongoing bypass — see
+    deps.py's current_session()."""
+    from app import models
+    from app.db import SessionLocal
+
+    otp_login(client, "legacy-session@example.com")
+    token = client.cookies.get("strix_saas_session")
+
+    db = SessionLocal()
+    try:
+        sess = db.get(models.Session_, token)
+        sess.expires_at = None
+        db.commit()
+    finally:
+        db.close()
+
+    res = client.get("/api/auth/me")
+    assert res.status_code == 200
+
+
 def test_otp_verify_second_login_reuses_active_org(client):
     otp_login(client, "repeat@example.com")
     org = create_org(client, "Repeat Co")

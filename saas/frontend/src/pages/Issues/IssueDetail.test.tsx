@@ -95,6 +95,13 @@ describe("IssueDetail", () => {
     expect(screen.getByText("Automatically detected")).toBeInTheDocument();
   });
 
+  it("shows a Mock fallback badge for a finding filed during a real-scan fallback", async () => {
+    mockFetchImpl(async () => jsonRes({ ...ISSUE, source: "mock_fallback" }));
+    renderWithProviders(<IssueDetail />, { route: "/issues/i1", path: "/issues/:id" });
+    await screen.findByText("SQL injection in search");
+    expect(screen.getByText("Mock fallback")).toBeInTheDocument();
+  });
+
   it("omits the badge for an agent-validated finding", async () => {
     mockFetchImpl(async () => jsonRes({ ...ISSUE, source: null }));
     renderWithProviders(<IssueDetail />, { route: "/issues/i1", path: "/issues/:id" });

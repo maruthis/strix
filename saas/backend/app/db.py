@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -28,20 +29,54 @@ def init_db() -> None:
     from . import models  # noqa: F401  (register mappers)
 
     Base.metadata.create_all(bind=engine)
-    _add_missing_columns()
+    _run_migrations()
+
+
+def _run_migrations() -> None:
+    """Bring the schema to Alembic's ``head`` revision (``saas/backend/migrations/``).
+
+    A database with no ``alembic_version`` row is either brand new (just
+    created by ``create_all`` above — e.g. every test run) or predates this
+    migration framework, back when schema drift was patched with an
+    unversioned ``ALTER TABLE ... ADD COLUMN`` scan on every startup
+    (``_add_missing_columns`` below). Either way, running that scan one
+    more time guarantees the database's columns already match every
+    current model field, so instead of replaying each migration's DDL
+    against tables/columns that already exist (which would fail — e.g.
+    "duplicate column"), the database is stamped at ``head`` directly.
+
+    A database that already has an ``alembic_version`` row is on a normal
+    footing and just needs ``upgrade head`` — this is the path every
+    schema change should go through from now on: add a new Alembic
+    revision (``uv run alembic revision --autogenerate -m "..."`` from
+    ``saas/backend/``), not a new model field relied on to silently appear
+    via the adoption bridge above.
+    """
+    from alembic import command
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+
+    backend_dir = Path(__file__).resolve().parent.parent
+    cfg = Config(str(backend_dir / "alembic.ini"))
+    cfg.set_main_option("script_location", str(backend_dir / "migrations"))
+
+    with engine.connect() as conn:
+        current_revision = MigrationContext.configure(conn).get_current_revision()
+
+    if current_revision is None:
+        _add_missing_columns()
+        command.stamp(cfg, "head")
+    else:
+        command.upgrade(cfg, "head")
 
 
 def _add_missing_columns() -> None:
-    """Best-effort ``ALTER TABLE ... ADD COLUMN`` for columns added to a
-    mapped model after a table already exists.
-
-    There's no migration framework here (no Alembic) — ``create_all`` only
-    creates *missing tables*, it never alters an existing one. Without this,
-    adding a nullable column to a model would silently do nothing against a
-    database that predates the change, and every query touching that column
-    would fail with "no such column". This only ever adds columns, never
-    drops or alters existing ones, so it's safe to run unconditionally on
-    every startup.
+    """Best-effort ``ALTER TABLE ... ADD COLUMN`` adoption bridge for a
+    database that predates the Alembic migration framework — see
+    ``_run_migrations`` above, which is the only caller. Not a substitute
+    for writing migrations: this only ever runs once, against a database
+    with no ``alembic_version`` row yet, and only ever adds columns, never
+    drops or alters existing ones.
     """
     inspector = inspect(engine)
     with engine.begin() as conn:

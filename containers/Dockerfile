@@ -1,28 +1,49 @@
+# Pin the rolling base image to a specific manifest-list digest (covers
+# amd64/arm64/arm-v7/386 — not just one architecture) rather than tracking
+# whatever "latest" resolves to at build time. This is only the base OS
+# layer: the `apt-get upgrade` immediately below is a deliberate, separate
+# choice to keep package/CVE data current for a security tool, not
+# something this pin is meant to prevent. Bump by re-running:
+#   docker buildx imagetools inspect kalilinux/kali-rolling:latest
+ARG KALI_ROLLING_DIGEST=sha256:1a2eb0501a2dbe8aa8f513b0791699dbd9b539696768f40b2cbe1dead2fb0d67
+
 # ---------------------------------------------------------------------------
 # Builder stage: compile the Go tools here so the Go toolchain (~225MB) and the
 # module/build caches never reach the runtime image. The resulting binaries are
 # statically linked and copied into the final stage.
 # ---------------------------------------------------------------------------
-FROM kalilinux/kali-rolling:latest AS gobuilder
+FROM kalilinux/kali-rolling@${KALI_ROLLING_DIGEST} AS gobuilder
 
 RUN apt-get update && \
     apt-get install -y kali-archive-keyring && \
     apt-get update && \
     apt-get install -y --no-install-recommends golang-go git ca-certificates
 
+# Pinned to a known-good tagged release rather than @latest: an unpinned
+# `go install pkg@latest` means every image rebuild can silently pull a
+# different (and unreviewed) binary — including from a compromised
+# upstream module or maintainer account — with no way to audit or roll
+# back to what actually shipped before. Bump these deliberately.
+ARG HTTPX_VERSION=v1.10.0
+ARG KATANA_VERSION=v1.7.0
+ARG CVEMAP_VERSION=v2.0.2
+ARG GOSPIDER_VERSION=v1.1.6
+ARG INTERACTSH_VERSION=v1.3.1
+ARG GOVULNCHECK_VERSION=v1.1.4
+
 ENV GOBIN=/out/bin
 RUN mkdir -p /out/bin && \
-    go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest && \
-    go install -v github.com/projectdiscovery/katana/cmd/katana@latest && \
-    go install -v github.com/projectdiscovery/cvemap/cmd/vulnx@latest && \
-    go install -v github.com/jaeles-project/gospider@latest && \
-    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest && \
-    go install -v golang.org/x/vuln/cmd/govulncheck@latest
+    go install -v github.com/projectdiscovery/httpx/cmd/httpx@${HTTPX_VERSION} && \
+    go install -v github.com/projectdiscovery/katana/cmd/katana@${KATANA_VERSION} && \
+    go install -v github.com/projectdiscovery/cvemap/cmd/vulnx@${CVEMAP_VERSION} && \
+    go install -v github.com/jaeles-project/gospider@${GOSPIDER_VERSION} && \
+    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@${INTERACTSH_VERSION} && \
+    go install -v golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
 # ---------------------------------------------------------------------------
 # Runtime stage
 # ---------------------------------------------------------------------------
-FROM kalilinux/kali-rolling:latest
+FROM kalilinux/kali-rolling@${KALI_ROLLING_DIGEST}
 
 LABEL description="AI Agent Penetration Testing Environment with Comprehensive Automated Tools"
 
@@ -85,7 +106,11 @@ USER root
 RUN cp /app/certs/ca.crt /usr/local/share/ca-certificates/ca.crt && \
     update-ca-certificates
 
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+# Pinned via the versioned install-script URL (astral.sh/uv/<version>/install.sh)
+# rather than the unversioned one, which always installs whatever uv's
+# latest release happens to be at build time.
+ARG UV_VERSION=0.12.5
+RUN curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | env UV_INSTALL_DIR=/usr/local/bin sh
 
 USER pentester
 WORKDIR /tmp
@@ -176,9 +201,18 @@ USER root
 # overwrite a root-owned binary under /usr/local/bin, which otherwise fails with
 # "cannot move binary" and aborts the scan. Pin the initial version for
 # reproducible builds; self-update then pulls fresh detectors at runtime.
+#
+# The installer script itself is fetched from GitHub too — pinned to a
+# specific commit (not `main`) so the script's own logic can't change
+# under this build without a deliberate bump here, same reasoning as the
+# binary version pin. Same treatment below for trivy's install.sh.
 ARG TRUFFLEHOG_VERSION=3.95.9
-RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /home/pentester/.local/bin "v${TRUFFLEHOG_VERSION}" && \
+ARG TRUFFLEHOG_INSTALL_SH_COMMIT=f37f2eff68c31620fd88bc37ff2b7d57ea0c700c
+RUN curl -sSfL "https://raw.githubusercontent.com/trufflesecurity/trufflehog/${TRUFFLEHOG_INSTALL_SH_COMMIT}/scripts/install.sh" | sh -s -- -b /home/pentester/.local/bin "v${TRUFFLEHOG_VERSION}" && \
     chown -R pentester:pentester /home/pentester/.local
+# Pinned tag rather than resolving GitHub's "latest" release at build time
+# (same rationale as the go install pins above).
+ARG GITLEAKS_VERSION=v8.30.1
 RUN set -eux; \
     ARCH="$(uname -m)"; \
     case "$ARCH" in \
@@ -186,13 +220,14 @@ RUN set -eux; \
         aarch64|arm64) GITLEAKS_ARCH="arm64" ;; \
         *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
     esac; \
-    TAG="$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r .tag_name)"; \
-    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/${TAG}/gitleaks_${TAG#v}_linux_${GITLEAKS_ARCH}.tar.gz" -o /tmp/gitleaks.tgz; \
+    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_${GITLEAKS_ARCH}.tar.gz" -o /tmp/gitleaks.tgz; \
     tar -xzf /tmp/gitleaks.tgz -C /tmp; \
     install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks; \
     rm -f /tmp/gitleaks /tmp/gitleaks.tgz
 
-RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+ARG TRIVY_VERSION=v0.74.0
+ARG TRIVY_INSTALL_SH_COMMIT=75c4dc0f45c5d7ffd05ae26df1e0c666787bdf2a
+RUN curl -sfL "https://raw.githubusercontent.com/aquasecurity/trivy/${TRIVY_INSTALL_SH_COMMIT}/contrib/install.sh" | sh -s -- -b /usr/local/bin "${TRIVY_VERSION}"
 
 RUN apt-get install -y wapiti
 

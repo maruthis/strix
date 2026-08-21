@@ -163,6 +163,17 @@ describe("IssuesList", () => {
     expect(screen.getByText("Automatically detected")).toBeInTheDocument();
   });
 
+  it("shows a Mock fallback badge for a finding filed during a real-scan fallback", async () => {
+    mockIssuesEnv({
+      items: [makeIssue({ source: "mock_fallback" })],
+      severity_counts: { critical: 1, high: 0, medium: 0, low: 0 },
+      status_counts: { all: 1, open: 1 },
+    });
+    renderWithProviders(<IssuesList />);
+    await screen.findByText("SQL injection");
+    expect(screen.getByText("Mock fallback")).toBeInTheDocument();
+  });
+
   it("omits the badge for an agent-validated finding", async () => {
     mockIssuesEnv(RESPONSE);
     renderWithProviders(<IssuesList />);

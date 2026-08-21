@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from . import models
 from .db import get_db
 from .settings import settings
+from .time_utils import utcnow
 
 
 def db_dep() -> Generator[Session, None, None]:
@@ -21,6 +22,16 @@ def current_session(request: Request, db: Session = Depends(db_dep)) -> models.S
     sess = db.get(models.Session_, token)
     if not sess:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="not_authenticated")
+    # expires_at is nullable only for a session row that predates this
+    # column (see models.Session_) — those are treated as still valid
+    # rather than immediately logged out, and simply age out the normal
+    # way once the user re-authenticates. Every session created since
+    # (see auth.py's otp_verify) always sets it, so this is a one-time
+    # adoption allowance, not an ongoing bypass.
+    if sess.expires_at is not None and sess.expires_at < utcnow():
+        db.delete(sess)
+        db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="session_expired")
     return sess
 
 

@@ -168,13 +168,61 @@ async def test_scan_falls_back_to_mock_when_real_scan_unavailable():
         org, repo = _make_org_and_repo(db)
         pentest = _make_pentest(db, org, repo)
 
-        # `strix` (the real-scan extra) isn't installed in this venv, so
-        # _run_real_scan's import fails and _scan should fall back to the
-        # mock scanner rather than propagating the ImportError.
+        # No GitHub/GitLab credential is connected and the repo doesn't
+        # exist, so _run_real_scan's clone step raises and _scan should
+        # fall back to the mock scanner rather than propagating that.
         findings = await jobs._scan(db, pentest, None)
         assert isinstance(findings, list)
+
+        # The fallback must be visible, not indistinguishable from a
+        # genuine result: the pentest records why, and every finding it
+        # filed is tagged.
+        assert pentest.mock_fallback_reason
+        assert all(f["source"] == "mock_fallback" for f in findings)
     finally:
         jobs.settings.enable_real_scan = False
+        db.close()
+
+
+async def test_scan_does_not_tag_findings_when_real_scan_disabled():
+    """The *intended* mock scanner (SAAS_ENABLE_REAL_SCAN unset/false) is
+    not a fallback and must not be tagged as one."""
+    db = SessionLocal()
+    try:
+        org, repo = _make_org_and_repo(db)
+        pentest = _make_pentest(db, org, repo)
+
+        findings = await jobs._scan(db, pentest, None)
+
+        assert pentest.mock_fallback_reason is None
+        assert all(f.get("source") is None for f in findings)
+    finally:
+        db.close()
+
+
+async def test_run_real_scan_redacts_credential_from_clone_failure(monkeypatch):
+    """A failed clone must never leak the org's live PAT into the
+    exception message that _scan()'s except-block logs."""
+
+    def _boom_clone_repository(url, run_name, dest_name, ref):
+        raise ValueError("Could not clone repository https://x-access-token:sekrit-token@github.com/acme/widgets.git: fatal error")
+
+    async def _unreachable_run_strix_scan(**kwargs):
+        raise AssertionError("run_strix_scan must not be reached when the clone step fails")
+
+    _install_fake_strix_module(monkeypatch, _unreachable_run_strix_scan, clone_repository=_boom_clone_repository)
+
+    db = SessionLocal()
+    try:
+        org, repo = _make_org_and_repo(db)
+        pentest = _make_pentest(db, org, repo)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await jobs._run_real_scan(db, pentest, None)
+
+        assert "sekrit-token" not in str(excinfo.value)
+        assert "***" in str(excinfo.value)
+    finally:
         db.close()
 
 

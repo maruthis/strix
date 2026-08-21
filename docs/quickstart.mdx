@@ -11,14 +11,14 @@ description: "Install Strix and run your first security scan"
 ## Installation
 
 <Tabs>
-  <Tab title="curl">
+  <Tab title="pip">
     ```bash
-    curl -sSL https://strix.ai/install | bash
+    pip install "strix-agent @ git+https://github.com/maruthis/strix"
     ```
   </Tab>
-  <Tab title="pipx">
+  <Tab title="uv">
     ```bash
-    pipx install strix-agent
+    uv tool install "strix-agent @ git+https://github.com/maruthis/strix"
     ```
   </Tab>
 </Tabs>

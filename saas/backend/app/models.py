@@ -69,6 +69,14 @@ class Session_(TimestampMixin, Base):
     token: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     active_org_id: Mapped[str | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
+    # Absolute server-side expiry, set at creation to match the cookie's own
+    # max_age (see auth.py's _set_session_cookie) — without this, the
+    # server accepted a session token forever regardless of the cookie's
+    # client-side max_age, so a leaked token had unbounded blast radius.
+    # Nullable only so a row seeded directly in a test/migration without
+    # setting it doesn't crash current_session(); every session created
+    # through auth.py always sets it.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class OtpCode(TimestampMixin, Base):
@@ -186,6 +194,14 @@ class Pentest(TimestampMixin, Base):
     # "user_instructions" (see strix/core/inputs.py's build_root_task).
     # None/empty for a normal New Pentest, which has no such input.
     custom_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set (a short reason string) only when SAAS_ENABLE_REAL_SCAN=1 and the
+    # real engine raised, causing app/jobs.py's _scan() to fall back to the
+    # mock scanner — null for a normal completed real scan, and null for a
+    # pentest that was always mock (real scan disabled). Surfaced in the UI
+    # and audit trail so a fallback result is never indistinguishable from
+    # a genuine one; see also Issue.source == "mock_fallback" on this
+    # pentest's findings.
+    mock_fallback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # --------------------------------------------------------------------------
@@ -219,7 +235,10 @@ class Issue(TimestampMixin, Base):
     endpoint: Mapped[str] = mapped_column(String, default="")
     fix_effort: Mapped[str] = mapped_column(String, default="medium")  # low|medium|high
     # "baseline_scan" for a Tier 3 deterministic finding (trivy/gitleaks/kube-linter,
-    # filed before the agent loop starts), None/"agent_validated" for everything else.
+    # filed before the agent loop starts); "mock_fallback" when this finding
+    # is a canned MockScanner result filed because the real engine raised
+    # (see Pentest.mock_fallback_reason on the parent pentest); None/
+    # "agent_validated" for everything else.
     source: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 

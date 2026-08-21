@@ -24,12 +24,13 @@ Two scan backends:
   of the pipeline (Issue creation, severity counting) doesn't need a
   real-vs-mock branch. Falls back to the mock scanner with a logged
   warning if the real engine raises (e.g. Docker/LLM credentials missing,
-  or cloning fails), so the job queue never gets stuck. Uses the target
+  or cloning fails) — the resulting findings and the Pentest row are both
+  tagged so the fallback is visible rather than indistinguishable from a
+  genuine result (`Pentest.mock_fallback_reason`, `Issue.source ==
+  "mock_fallback"`) — so the job queue never gets stuck. Uses the target
   org's `OrgLlmSettings` (model/key/base) if configured, applied via
-  process env vars right before the call — see `_run_real_scan`'s
-  docstring for why that's only safe as long as this module's worker loop
-  stays single-scan-at-a-time (it is: `_worker_loop` below awaits each job
-  before dequeuing the next).
+  process env vars right before the call, under `_llm_env_lock` — see
+  `_run_real_scan`'s docstring for why that lock exists.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ import json
 import logging
 import os
 import random
+import re
 import shutil
 import subprocess
 import tempfile
@@ -175,9 +177,10 @@ async def _run_pentest(pentest_id: str) -> None:
                     domain.last_tested_at = pentest.finished_at
 
             db.commit()
-            record_audit(
-                db, pentest.org_id, pentest.created_by, "pentest.completed", pentest.target_label, {"severity_counts": severity_counts}
-            )
+            audit_extra = {"severity_counts": severity_counts}
+            if pentest.mock_fallback_reason:
+                audit_extra["mock_fallback_reason"] = pentest.mock_fallback_reason
+            record_audit(db, pentest.org_id, pentest.created_by, "pentest.completed", pentest.target_label, audit_extra)
         except Exception:  # noqa: BLE001 - a scan/processing bug must not strand the pentest in "running" forever
             logger.exception("scan failed for pentest %s", pentest.id)
             db.rollback()
@@ -193,12 +196,43 @@ async def _scan(db, pentest: models.Pentest, llm_settings: models.OrgLlmSettings
     if settings.enable_real_scan:
         try:
             return await _run_real_scan(db, pentest, llm_settings)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.exception("real scan failed for pentest %s, falling back to mock scanner", pentest.id)
+            # Tag the pentest and every finding it files below as a
+            # fallback result — without this, a real-scan failure (expired
+            # LLM key, Docker down, clone failure) produces a report that's
+            # byte-for-byte indistinguishable from a genuine clean/found
+            # result, both to the customer and in the audit trail.
+            pentest.mock_fallback_reason = f"{type(exc).__name__}: {exc}"[:500]
+            findings = await _run_mock_scan(pentest)
+            for finding in findings:
+                finding["source"] = "mock_fallback"
+            return findings
     return await _run_mock_scan(pentest)
 
 
 _LLM_ENV_KEYS = ("STRIX_LLM", "LLM_API_KEY", "LLM_API_BASE")
+
+# Guards the read-modify-restore of os.environ's LLM_* keys in
+# _run_real_scan/_run_real_pr_review_scan below. The single-worker queue
+# already serializes these calls today (see this module's docstring), so
+# this lock is currently redundant in practice — it exists so that
+# invariant is *enforced*, not just documented, the moment anyone adds a
+# second worker task to this same process (e.g. to raise throughput)
+# without first splitting scan execution into isolated processes.
+_llm_env_lock = asyncio.Lock()
+
+# Strips embedded `user:token@` credentials from a URL — `_repo_clone_url`
+# below embeds the org's live GitHub/GitLab PAT directly in the clone URL
+# passed to `git`, and a failed clone/fetch echoes that URL back verbatim
+# in its error message (both from strix's `clone_repository` and from the
+# `git` CLI's own stderr in `_clone_and_checkout_pr`). Applied to every
+# such error before it can reach a log line or an audit entry.
+_CREDENTIAL_URL_RE = re.compile(r"://[^/@\s]+@")
+
+
+def _redact_credential_url(text: str) -> str:
+    return _CREDENTIAL_URL_RE.sub("://***@", text)
 
 
 def _repo_clone_url(db, org_id: str, repo: models.Repository) -> str:
@@ -258,9 +292,15 @@ async def _build_scan_targets(db, pentest: models.Pentest) -> tuple[list[dict], 
         requested_ref = pentest.ref or repo.default_branch
         # git clone shells out and blocks; run off the event loop so the
         # single-scan-at-a-time worker doesn't stall other request handling.
-        cloned_path, resolved_sha = await asyncio.to_thread(
-            clone_repository, clone_url, pentest.id, None, requested_ref
-        )
+        try:
+            cloned_path, resolved_sha = await asyncio.to_thread(
+                clone_repository, clone_url, pentest.id, None, requested_ref
+            )
+        except Exception as exc:  # noqa: BLE001 - re-raised with the org's PAT redacted
+            # clone_repository embeds clone_url (with the credential) verbatim
+            # in its error message on failure — strip it before this can reach
+            # a log line (`_scan`'s except Exception: logger.exception(...)).
+            raise RuntimeError(_redact_credential_url(str(exc))) from None
         pentest.resolved_commit_sha = resolved_sha
         db.commit()
         targets = [
@@ -336,62 +376,69 @@ async def _run_real_scan(db, pentest: models.Pentest, llm_settings: models.OrgLl
     afterward and strix's settings cache is invalidated both times so the
     next scan (this org's or another's) re-reads fresh values.
 
-    This is safe ONLY because jobs.py's worker processes one scan at a
-    time (`_worker_loop` awaits each job before dequeuing the next) — two
-    concurrent `run_strix_scan()` calls in this process would race on this
-    same global state. Don't parallelize the worker without also isolating
-    each scan (e.g. one subprocess per scan) if per-org credentials matter.
+    `_llm_env_lock` (module-level) serializes this section: two concurrent
+    `run_strix_scan()` calls in this process would otherwise race on this
+    same global env-var state. Today's single-worker queue already
+    guarantees that in practice (`_worker_loop` awaits each job before
+    dequeuing the next), but the lock makes it an enforced invariant
+    rather than just a documented one — the thing that would otherwise
+    silently break the moment a second in-process worker task is added
+    for throughput. Don't parallelize scan *execution* itself (e.g. one
+    subprocess per scan) without also reconsidering this lock, since
+    holding it across a whole scan serializes real scans to one at a time
+    regardless of worker count.
     """
-    from strix.config import load_settings
-    from strix.config import loader as strix_config_loader
-    from strix.core.paths import run_dir_for
-    from strix.core.runner import run_strix_scan  # lazy import: optional dependency
+    async with _llm_env_lock:
+        from strix.config import load_settings
+        from strix.config import loader as strix_config_loader
+        from strix.core.paths import run_dir_for
+        from strix.core.runner import run_strix_scan  # lazy import: optional dependency
 
-    override_active = bool(llm_settings and llm_settings.model)
-    previous_env = {k: os.environ.get(k) for k in _LLM_ENV_KEYS} if override_active else None
+        override_active = bool(llm_settings and llm_settings.model)
+        previous_env = {k: os.environ.get(k) for k in _LLM_ENV_KEYS} if override_active else None
 
-    if override_active:
-        os.environ["STRIX_LLM"] = llm_settings.model
-        if llm_settings.api_key:
-            os.environ["LLM_API_KEY"] = llm_settings.api_key
-        if llm_settings.api_base:
-            os.environ["LLM_API_BASE"] = llm_settings.api_base
-        elif "LLM_API_BASE" in os.environ:
-            del os.environ["LLM_API_BASE"]
-        strix_config_loader._cached = None
-
-    try:
-        targets, local_sources = await _build_scan_targets(db, pentest)
-        scan_config = {
-            "scan_id": pentest.id,
-            "targets": targets,
-            "run_name": pentest.id,
-            "scan_mode": pentest.scan_mode,
-            "user_instructions": pentest.custom_instructions or "",
-            "skills": to_engine_skills(pentest.skills),
-        }
-        await run_strix_scan(
-            scan_config=scan_config,
-            scan_id=pentest.id,
-            image=load_settings().runtime.image,
-            local_sources=local_sources,
-        )
-
-        vulnerabilities_path = run_dir_for(pentest.id) / "vulnerabilities.json"
-        if not vulnerabilities_path.exists():
-            return []
-        raw_findings = json.loads(vulnerabilities_path.read_text(encoding="utf-8"))
-        if not isinstance(raw_findings, list):
-            return []
-        return [_translate_real_finding(f) for f in raw_findings if isinstance(f, dict)]
-    finally:
-        if override_active and previous_env is not None:
-            for key, value in previous_env.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+        if override_active:
+            os.environ["STRIX_LLM"] = llm_settings.model
+            if llm_settings.api_key:
+                os.environ["LLM_API_KEY"] = llm_settings.api_key
+            if llm_settings.api_base:
+                os.environ["LLM_API_BASE"] = llm_settings.api_base
+            elif "LLM_API_BASE" in os.environ:
+                del os.environ["LLM_API_BASE"]
             strix_config_loader._cached = None
+
+        try:
+            targets, local_sources = await _build_scan_targets(db, pentest)
+            scan_config = {
+                "scan_id": pentest.id,
+                "targets": targets,
+                "run_name": pentest.id,
+                "scan_mode": pentest.scan_mode,
+                "user_instructions": pentest.custom_instructions or "",
+                "skills": to_engine_skills(pentest.skills),
+            }
+            await run_strix_scan(
+                scan_config=scan_config,
+                scan_id=pentest.id,
+                image=load_settings().runtime.image,
+                local_sources=local_sources,
+            )
+
+            vulnerabilities_path = run_dir_for(pentest.id) / "vulnerabilities.json"
+            if not vulnerabilities_path.exists():
+                return []
+            raw_findings = json.loads(vulnerabilities_path.read_text(encoding="utf-8"))
+            if not isinstance(raw_findings, list):
+                return []
+            return [_translate_real_finding(f) for f in raw_findings if isinstance(f, dict)]
+        finally:
+            if override_active and previous_env is not None:
+                for key, value in previous_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+                strix_config_loader._cached = None
 
 
 # --------------------------------------------------------------------------
@@ -431,7 +478,13 @@ def _clone_and_checkout_pr(clone_url: str, run_name: str, provider: str, pr_numb
         try:
             return subprocess.run(args, capture_output=True, text=True, check=True)  # noqa: S603
         except subprocess.CalledProcessError as e:
-            raise ValueError(f"{error_message}: {e.stderr or e}") from e
+            # error_message embeds clone_url (with the org's credential) and
+            # git's own stderr often echoes the same URL on a failed
+            # clone/fetch (e.g. curl-backed HTTPS errors) — redact both
+            # before this can reach a log line or bubble up as an audit
+            # entry. `from None` also drops the original exception (and its
+            # unredacted args) from the traceback chain a logger would print.
+            raise ValueError(_redact_credential_url(f"{error_message}: {e.stderr or e}")) from None
 
     _run([git_executable, "clone", clone_url, str(clone_path)], f"Could not clone repository {clone_url}")
     ref_spec = _pr_ref_spec(provider, pr_number)
@@ -466,81 +519,82 @@ async def _run_real_pr_review_scan(
     override mechanics this mirrors — same safety caveat applies (single
     scan at a time in this process).
     """
-    from strix.config import load_settings
-    from strix.config import loader as strix_config_loader
-    from strix.core.paths import run_dir_for
-    from strix.core.runner import run_strix_scan  # lazy import: optional dependency
-    from strix.interface.utils import resolve_diff_scope_context
+    async with _llm_env_lock:
+        from strix.config import load_settings
+        from strix.config import loader as strix_config_loader
+        from strix.core.paths import run_dir_for
+        from strix.core.runner import run_strix_scan  # lazy import: optional dependency
+        from strix.interface.utils import resolve_diff_scope_context
 
-    override_active = bool(llm_settings and llm_settings.model)
-    previous_env = {k: os.environ.get(k) for k in _LLM_ENV_KEYS} if override_active else None
+        override_active = bool(llm_settings and llm_settings.model)
+        previous_env = {k: os.environ.get(k) for k in _LLM_ENV_KEYS} if override_active else None
 
-    if override_active:
-        os.environ["STRIX_LLM"] = llm_settings.model
-        if llm_settings.api_key:
-            os.environ["LLM_API_KEY"] = llm_settings.api_key
-        if llm_settings.api_base:
-            os.environ["LLM_API_BASE"] = llm_settings.api_base
-        elif "LLM_API_BASE" in os.environ:
-            del os.environ["LLM_API_BASE"]
-        strix_config_loader._cached = None
-
-    try:
-        clone_url = _repo_clone_url(db, review.org_id, repo)
-        cloned_path, resolved_sha = await asyncio.to_thread(
-            _clone_and_checkout_pr, clone_url, review.id, repo.provider, review.pr_number
-        )
-        review.resolved_head_sha = resolved_sha
-        db.commit()
-
-        workspace_subdir = repo.full_name.split("/")[-1]
-        local_sources = [{"source_path": cloned_path, "workspace_subdir": workspace_subdir, "protect_metadata": False}]
-        target_branch = review.target_branch or repo.default_branch
-
-        diff_scope = await asyncio.to_thread(
-            resolve_diff_scope_context, local_sources, "diff", f"origin/{target_branch}", True
-        )
-
-        scan_config = {
-            "scan_id": review.id,
-            "targets": [
-                {
-                    "type": "repository",
-                    "details": {
-                        "target_repo": repo.full_name,
-                        "cloned_repo_path": cloned_path,
-                        "workspace_subdir": workspace_subdir,
-                    },
-                }
-            ],
-            "run_name": review.id,
-            # "quick" over "deep": diff-scope already narrows the surface to
-            # the PR's changed files, and PR checks need fast turnaround.
-            "scan_mode": "quick",
-            "diff_scope": diff_scope.metadata,
-        }
-        await run_strix_scan(
-            scan_config=scan_config,
-            scan_id=review.id,
-            image=load_settings().runtime.image,
-            local_sources=local_sources,
-        )
-
-        vulnerabilities_path = run_dir_for(review.id) / "vulnerabilities.json"
-        if not vulnerabilities_path.exists():
-            return []
-        raw_findings = json.loads(vulnerabilities_path.read_text(encoding="utf-8"))
-        if not isinstance(raw_findings, list):
-            return []
-        return [_translate_real_finding(f) for f in raw_findings if isinstance(f, dict)]
-    finally:
-        if override_active and previous_env is not None:
-            for key, value in previous_env.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+        if override_active:
+            os.environ["STRIX_LLM"] = llm_settings.model
+            if llm_settings.api_key:
+                os.environ["LLM_API_KEY"] = llm_settings.api_key
+            if llm_settings.api_base:
+                os.environ["LLM_API_BASE"] = llm_settings.api_base
+            elif "LLM_API_BASE" in os.environ:
+                del os.environ["LLM_API_BASE"]
             strix_config_loader._cached = None
+
+        try:
+            clone_url = _repo_clone_url(db, review.org_id, repo)
+            cloned_path, resolved_sha = await asyncio.to_thread(
+                _clone_and_checkout_pr, clone_url, review.id, repo.provider, review.pr_number
+            )
+            review.resolved_head_sha = resolved_sha
+            db.commit()
+
+            workspace_subdir = repo.full_name.split("/")[-1]
+            local_sources = [{"source_path": cloned_path, "workspace_subdir": workspace_subdir, "protect_metadata": False}]
+            target_branch = review.target_branch or repo.default_branch
+
+            diff_scope = await asyncio.to_thread(
+                resolve_diff_scope_context, local_sources, "diff", f"origin/{target_branch}", True
+            )
+
+            scan_config = {
+                "scan_id": review.id,
+                "targets": [
+                    {
+                        "type": "repository",
+                        "details": {
+                            "target_repo": repo.full_name,
+                            "cloned_repo_path": cloned_path,
+                            "workspace_subdir": workspace_subdir,
+                        },
+                    }
+                ],
+                "run_name": review.id,
+                # "quick" over "deep": diff-scope already narrows the surface to
+                # the PR's changed files, and PR checks need fast turnaround.
+                "scan_mode": "quick",
+                "diff_scope": diff_scope.metadata,
+            }
+            await run_strix_scan(
+                scan_config=scan_config,
+                scan_id=review.id,
+                image=load_settings().runtime.image,
+                local_sources=local_sources,
+            )
+
+            vulnerabilities_path = run_dir_for(review.id) / "vulnerabilities.json"
+            if not vulnerabilities_path.exists():
+                return []
+            raw_findings = json.loads(vulnerabilities_path.read_text(encoding="utf-8"))
+            if not isinstance(raw_findings, list):
+                return []
+            return [_translate_real_finding(f) for f in raw_findings if isinstance(f, dict)]
+        finally:
+            if override_active and previous_env is not None:
+                for key, value in previous_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+                strix_config_loader._cached = None
 
 
 async def _run_pr_review_job(review_id: str) -> None:

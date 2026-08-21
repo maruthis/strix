@@ -19,6 +19,22 @@ uv run uvicorn app.main:app --reload --port 8000
 Data is stored in `saas/backend/strix_saas.db` (SQLite) by default. Delete
 that file to reset all local data.
 
+## Schema changes
+
+Schema is managed with [Alembic](https://alembic.sqlalchemy.org/)
+(`migrations/`). `app.db.init_db()` (called from the app's lifespan on
+every startup) applies any pending migration automatically — there's
+nothing to run by hand in normal use. When you add or change a model
+field in `app/models.py`, generate the migration for it:
+
+```
+uv run alembic revision --autogenerate -m "add foo to bar"
+```
+
+Review the generated file under `migrations/versions/` before committing
+— autogenerate is a good first draft, not a guarantee (it doesn't detect
+every kind of change, e.g. a column rename shows up as a drop + add).
+
 ## Tests
 
 ```

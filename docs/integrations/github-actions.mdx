@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Strix
-        run: curl -sSL https://strix.ai/install | bash
+        run: pip install "strix-agent @ git+https://github.com/maruthis/strix"
 
       - name: Run Security Scan
         env:

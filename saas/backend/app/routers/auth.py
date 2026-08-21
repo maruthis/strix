@@ -18,6 +18,11 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 OTP_TTL_MINUTES = 10
 MAX_OTP_ATTEMPTS = 5
+# Absolute session lifetime — shared by the cookie's max_age (client-side
+# only, and easily stripped/edited) and Session_.expires_at (server-side,
+# what actually matters). A leaked token stops working after this long
+# even if the cookie is replayed with its max_age intact.
+SESSION_TTL = timedelta(days=30)
 
 
 class OtpStartIn(BaseModel):
@@ -40,7 +45,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
         httponly=True,
         samesite="lax",
         secure=not settings.dev_mode,
-        max_age=60 * 60 * 24 * 30,
+        max_age=int(SESSION_TTL.total_seconds()),
     )
 
 
@@ -97,7 +102,11 @@ def otp_verify(body: OtpVerifyIn, response: Response, db: Session = Depends(db_d
         db.flush()
 
     membership = db.query(models.Membership).filter_by(user_id=user.id).first()
-    session = models.Session_(user_id=user.id, active_org_id=membership.org_id if membership else None)
+    session = models.Session_(
+        user_id=user.id,
+        active_org_id=membership.org_id if membership else None,
+        expires_at=utcnow() + SESSION_TTL,
+    )
     db.add(session)
     db.commit()
 
