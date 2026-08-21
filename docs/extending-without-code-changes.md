@@ -18,11 +18,15 @@ forking or modifying `strix/`.
 ### 0.1 Standalone CLI + local web viewer
 
 ```bash
-curl -sSL https://strix.ai/install | bash
+pip install "strix-agent @ git+https://github.com/maruthis/strix"
 export STRIX_LLM="openai/gpt-5.4"
 export LLM_API_KEY="your-api-key"
 strix --target ./app-directory
 ```
+
+(Installing from `git+https://github.com/maruthis/strix` rather than the
+upstream `strix-agent` PyPI package is what gets this fork's changes —
+see §1-§5 below.)
 
 Runs entirely on your machine (Docker sandbox + your own LLM key), no
 account or cloud dependency. Results are written to
@@ -63,7 +67,7 @@ jobs:
         with:
           fetch-depth: 0   # needed for diff-scope resolution
       - name: Install Strix
-        run: curl -sSL https://strix.ai/install | bash
+        run: pip install "strix-agent @ git+https://github.com/maruthis/strix"
       - name: Run Strix
         env:
           STRIX_LLM: ${{ secrets.STRIX_LLM }}
@@ -85,29 +89,42 @@ etc.) works the same way; GitHub Actions is just the documented example.
 ### 0.4 As a skill inside another coding agent (Claude Code, Cursor, Codex, ...)
 
 ```bash
-npx skills add usestrix/strix
+npx skills add maruthis/strix
 ```
 
-This installs four [SKILL.md-compatible](https://agentskills.io) skills
-into whatever coding agent runs the command, giving that agent the
-ability to invoke Strix as a tool rather than a human running it
-directly:
+This installs three [SKILL.md-compatible](https://agentskills.io) skills
+(`skills/*/SKILL.md` at this repo's root) into whatever coding agent runs
+the command, giving that agent the ability to invoke Strix as a tool
+rather than a human running it directly:
 
 | Skill | What it lets the coding agent do |
 |---|---|
 | `penetration-testing-with-strix` | Run a headless scan and read back results |
-| `managed-pentesting-with-strix` | Drive the managed `app.strix.ai` platform via REST — no local Docker or LLM key needed |
 | `fix-security-vulnerabilities-with-strix` | Remediate a finding and re-scan to verify the fix |
 | `ci-security-scanning-with-strix` | Set up PR scanning in CI (i.e., write the §0.3 workflow for you) |
 
-Two of those four route to the *local* CLI/Docker path (§0.1) and one
-routes to the *managed* cloud path with no local infra at all — the
-coding agent picks whichever fits the environment it's running in. This
-is a different "no code change" story from §1-§5 below: it's not about
-extending Strix's own coverage, it's about *exposing* Strix, unmodified,
-to a codebase and its resident coding agent as a callable capability —
-one shell command, no repo changes beyond what `npx skills add` writes.
-See [`AGENTS.md`](../AGENTS.md) for the quick reference these skills are
+All three route to the *local* CLI/Docker path (§0.1) — every install
+instruction inside them uses `pip install "strix-agent @
+git+https://github.com/maruthis/strix"`, not the upstream PyPI package,
+so an agent following them gets this fork's changes (the `--skill` flag,
+ref-pinning, etc.), not the vendor's. The upstream `usestrix/strix`
+repo also ships a `managed-pentesting-with-strix` skill that drives the
+real, vendor-hosted `app.strix.ai` platform — that skill was **deliberately
+dropped** from this fork rather than carried over, because its entire
+content (API base URL, endpoint shapes, auth) describes infrastructure
+this fork doesn't operate; an agent following it from `maruthis/strix`
+would have called the vendor's real SaaS with the user's own account,
+not anything this fork controls. `saas/` (§0.2) is not exposed as an
+agent skill today because it isn't deployed at a public URL other
+people's agents could call — see `saas-architecture.md` if that changes.
+
+This is a different "no code change" story from §1-§5 below: it's not
+about extending Strix's own coverage, it's about *exposing* Strix to a
+codebase and its resident coding agent as a callable capability — one
+shell command, no repo changes beyond what `npx skills add` writes (and,
+for this fork, the one-time edit of the skill files themselves to point
+at `maruthis/strix` instead of `usestrix/strix` — already done). See
+[`AGENTS.md`](../AGENTS.md) for the quick reference these skills are
 built from.
 
 ### 0.5 As a library, from your own automation

@@ -1,50 +1,28 @@
 ---
 name: penetration-testing-with-strix
-description: Pentest a web app, API, codebase, repository, URL, domain, or IP with Strix — autonomous AI penetration testing that exploits and proves vulnerabilities (OWASP Top 10 and beyond — injection, XSS, SSRF, auth/access-control flaws, IDOR, business logic) instead of just flagging them. Runs self-hosted with the open-source CLI or via the managed app.strix.ai cloud, and returns validated findings with proof-of-concept exploits (Markdown, JSON, CSV, SARIF). Use when the user asks to pentest, hack, security-scan, security-audit, or find vulnerabilities in an app, API, website, or repo.
+description: Pentest a web app, API, codebase, repository, URL, domain, or IP with Strix — autonomous AI penetration testing that exploits and proves vulnerabilities (OWASP Top 10 and beyond — injection, XSS, SSRF, auth/access-control flaws, IDOR, business logic) instead of just flagging them. Runs self-hosted with the open-source CLI in a Docker sandbox, and returns validated findings with proof-of-concept exploits (Markdown, JSON, CSV, SARIF). Use when the user asks to pentest, hack, security-scan, security-audit, or find vulnerabilities in an app, API, website, or repo.
 license: Apache-2.0
 metadata:
-  author: usestrix
-  homepage: https://docs.strix.ai
+  author: maruthis
+  homepage: https://github.com/maruthis/strix
 ---
 
 # Run a Strix pentest
 
-Strix runs autonomous AI pentesting agents that dynamically exploit a target and only report findings validated with a working proof-of-concept. There are **two ways to run it, built on the same engine and producing the same findings** — pick per situation, and mix them freely:
-
-- **Open-source CLI** (self-hosted) — runs on your machine in a Docker sandbox with your own LLM key. Free, fully local, BYO-LLM, air-gap capable. Docs: [docs.strix.ai](https://docs.strix.ai).
-- **Cloud API** (managed) — runs on Strix's infrastructure via `https://app.strix.ai/api/v1`. No Docker, no LLM key, no local compute; adds team dashboards, scheduling, PR reviews, downloadable PDF/DOCX reports (Enterprise plan), and internal-network connectors. Docs: [docs.app.strix.ai](https://docs.app.strix.ai). Full workflow in the **managed-pentesting-with-strix** skill.
-
-## Which one? (decide, don't default)
-
-Choose honestly based on the situation — neither is "better":
-
-| Situation | Prefer |
-|---|---|
-| No Docker available, or a sandboxed/hosted agent/CI environment | **Cloud** |
-| User has no LLM key / doesn't want to pay per-token or manage models | **Cloud** |
-| Team visibility, shareable dashboard, scheduled/continuous scans, PR reviews, downloadable PDF/DOCX report (Enterprise) | **Cloud** |
-| Scanning internal/private infrastructure not reachable from your machine | **Cloud** (network connector) |
-| Source must never leave local infra (privacy/air-gap), or fully offline | **OSS CLI** |
-| Free / one-off / local dev-loop scan, Docker already present | **OSS CLI** |
-| BYO or self-hosted LLM, or a specific model not offered by the platform | **OSS CLI** |
-| CI: runner already has Docker and you want a self-contained gate | **OSS CLI** |
-| CI: no Docker, or you want results tracked centrally | **Cloud** |
-
-**Mix them:** e.g. use the OSS CLI for the fast local dev-loop while writing/fixing code, and the Cloud for the authoritative, team-visible scan + report + tracking; or gate PRs with the OSS CLI in CI while the Cloud runs scheduled deep scans and PR reviews across the org. Both emit the same SARIF 2.1.0, so findings line up across environments.
-
-If unsure and the user has (or will create) an app.strix.ai account, prefer **Cloud** — it avoids all local-infra friction. If they want zero signup / full local control, use the **OSS CLI**.
-
----
-
-# Option A — Open-source CLI (self-hosted)
+Strix runs autonomous AI pentesting agents that dynamically exploit a target and only report findings validated with a working proof-of-concept — self-hosted, on your machine, in a Docker sandbox with your own LLM key. Free, fully local, BYO-LLM, air-gap capable.
 
 ## Prerequisites
 
 1. **Docker running** — check with `docker info`. The first scan pulls the sandbox image automatically.
 2. **Strix installed** — check with `strix --version`. Install if missing:
    ```bash
-   curl -sSL https://strix.ai/install | bash   # or: pipx install strix-agent
+   pip install "strix-agent @ git+https://github.com/maruthis/strix"
+   # or: uv tool install "strix-agent @ git+https://github.com/maruthis/strix"
    ```
+   Installing from this fork (not the upstream `strix-agent` PyPI package) is what
+   gets its changes — see [`docs/extending-without-code-changes.md`](../../docs/extending-without-code-changes.md)
+   for what's different, including the `standards`/`vulnerabilities` skill catalog
+   usable via `--skill <name>` below.
 3. **LLM configured** — two environment variables:
    ```bash
    export STRIX_LLM="openai/gpt-5.4"      # any LiteLLM model id (openai/..., anthropic/..., openrouter/...)
@@ -82,6 +60,7 @@ Key flags:
 | `-n, --non-interactive` | Headless, exits on completion. Required for agents. |
 | `-m, --scan-mode` | `quick` (minutes) / `standard` (~30 min) / `deep` (hours, default). |
 | `--instruction` / `--instruction-file` | Credentials, focus areas, scope rules. |
+| `--skill NAME` | Preload a skill (repeatable, max 5) — e.g. `--skill owasp_top_10`, `--skill pci_dss` for standards coverage, or `--skill sql_injection` for a deep-dive on one vulnerability class. |
 | `--max-budget USD` | Hard LLM spend cap; scan wraps up cleanly at the limit. |
 | `--max-turns N` | Per-agent turn cap (default 500). |
 | `--resume RUN_NAME` | Resume a prior run from `strix_runs/`. |
@@ -110,34 +89,10 @@ Artifacts land in `strix_runs/<run-name>/`:
 
 ---
 
-# Option B — Cloud API (managed, no local infra)
-
-Full details, asset registration, polling, reports, PR reviews, schedules, and webhooks are in the **managed-pentesting-with-strix** skill. Minimal launch-and-poll:
-
-```bash
-export STRIX_API_TOKEN="<token>"   # org-scoped bearer, from Settings → API Access at app.strix.ai
-BASE=https://app.strix.ai/api/v1
-
-# 1. Launch a scan against an already-registered domain/repo asset
-scan_id=$(curl -sS "$BASE/scans" \
-  -H "Authorization: Bearer $STRIX_API_TOKEN" -H "Content-Type: application/json" \
-  -d '{"engagement_type":"live_test","domain_ids":["<domain-uuid>"]}' | jq -r .scan_id)
-
-# 2. Poll until terminal (pending → running → completed/failed/cancelled)
-curl -sS "$BASE/scans/$scan_id" -H "Authorization: Bearer $STRIX_API_TOKEN" | jq '.status'
-
-# 3. Read validated findings from the scan detail's `vulnerabilities[]`, or export SARIF
-curl -sS "$BASE/scans/$scan_id/sarif" -H "Authorization: Bearer $STRIX_API_TOKEN" -o findings.sarif
-```
-
-Ask the user to create the token (and register the target as a domain/repository asset) if they haven't. If Docker/local prerequisites aren't already satisfied, use this path instead of trying to install infra.
-
----
-
 ## Reporting & next steps
 
-Summarize findings by severity (critical/high/medium/low/info) and include the PoC evidence. To remediate and verify fixes (via either path), use the **fix-security-vulnerabilities-with-strix** skill. To wire scanning into CI/CD, use the **ci-security-scanning-with-strix** skill.
+Summarize findings by severity (critical/high/medium/low/info) and include the PoC evidence. To remediate and verify fixes, use the **fix-security-vulnerabilities-with-strix** skill. To wire scanning into CI/CD, use the **ci-security-scanning-with-strix** skill.
 
 ## Safety
 
-Only scan targets the user owns or is authorized to test. The Cloud platform enforces domain verification before external scans; for the OSS CLI, confirm authorization yourself if the target looks like third-party infrastructure.
+Only scan targets the user owns or is authorized to test — confirm authorization yourself if the target looks like third-party infrastructure.
