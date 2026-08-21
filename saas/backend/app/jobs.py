@@ -49,6 +49,7 @@ from . import crypto, models
 from .audit import record_audit
 from .db import SessionLocal
 from .settings import settings
+from .standard_skills import to_engine_skills
 from .time_utils import utcnow
 
 logger = logging.getLogger("saas.jobs")
@@ -367,6 +368,7 @@ async def _run_real_scan(db, pentest: models.Pentest, llm_settings: models.OrgLl
             "run_name": pentest.id,
             "scan_mode": pentest.scan_mode,
             "user_instructions": pentest.custom_instructions or "",
+            "skills": to_engine_skills(pentest.skills),
         }
         await run_strix_scan(
             scan_config=scan_config,

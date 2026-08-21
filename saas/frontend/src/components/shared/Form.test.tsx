@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Button, Field, Select, TextArea, TextInput, Toggle } from "./Form";
+import { Button, CheckboxGroup, Field, Select, TextArea, TextInput, Toggle } from "./Form";
 
 describe("Button", () => {
   it("renders each variant without crashing and forwards onClick", async () => {
@@ -95,5 +95,34 @@ describe("Field", () => {
       </Field>
     );
     expect(screen.getByText("Name")).toBeInTheDocument();
+  });
+});
+
+describe("CheckboxGroup", () => {
+  const options = [
+    { value: "owasp_top_10", label: "OWASP Top 10", description: "Default map" },
+    { value: "pci_dss", label: "PCI DSS" },
+  ];
+
+  it("toggles options and refuses to drop below minSelected", async () => {
+    const onChange = vi.fn();
+    render(<CheckboxGroup values={["owasp_top_10"]} onChange={onChange} options={options} minSelected={1} />);
+
+    const owasp = screen.getByRole("checkbox", { name: /OWASP Top 10/ });
+    expect(owasp).toBeChecked();
+    expect(owasp).toBeDisabled();
+    await userEvent.click(owasp);
+    expect(onChange).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "PCI DSS" }));
+    expect(onChange).toHaveBeenCalledWith(["owasp_top_10", "pci_dss"]);
+  });
+
+  it("unchecks a selected option when above minSelected", async () => {
+    const onChange = vi.fn();
+    render(<CheckboxGroup values={["owasp_top_10", "pci_dss"]} onChange={onChange} options={options} minSelected={1} />);
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /OWASP Top 10/ }));
+    expect(onChange).toHaveBeenCalledWith(["pci_dss"]);
   });
 });

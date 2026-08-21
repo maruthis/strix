@@ -84,6 +84,7 @@ export interface Pentest {
   ref: string | null;
   resolved_commit_sha: string | null;
   scan_mode: string;
+  skills: string[];
   status: PentestStatus;
   started_at: string | null;
   finished_at: string | null;
@@ -91,11 +92,18 @@ export interface Pentest {
   created_at: string;
 }
 
+export interface StandardSkill {
+  name: string;
+  label: string;
+  description: string;
+}
+
 export interface PentestSchedule {
   id: string;
   target_type: string;
   target_id: string;
   scan_mode: string;
+  skills: string[];
   cron_expr: string;
   enabled: boolean;
   last_run_at: string | null;

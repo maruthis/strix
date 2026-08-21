@@ -139,6 +139,9 @@ class PentestSchedule(TimestampMixin, Base):
     scan_mode: Mapped[str] = mapped_column(String, default="deep")
     cron_expr: Mapped[str] = mapped_column(String, default="0 0 * * 0")  # weekly default
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Standards coverage maps to preload on the root agent (names from
+    # app/standard_skills.py). Empty/null is treated as ["owasp_top_10"].
+    skills: Mapped[list] = mapped_column(JSON, default=list)
     # Set on create/re-enable and after every fire by app/scheduler.py; a
     # schedule with next_run_at in the past and enabled=True is due.
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -175,6 +178,9 @@ class Pentest(TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     severity_counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Standards coverage maps preloaded on the root agent. See
+    # app/standard_skills.py. Empty/null is treated as ["owasp_top_10"].
+    skills: Mapped[list] = mapped_column(JSON, default=list)
     # Free-text instruction to fold into the scan's root task (e.g. from a
     # Chat-triggered scan) — passed through to strix as scan_config's
     # "user_instructions" (see strix/core/inputs.py's build_root_task).

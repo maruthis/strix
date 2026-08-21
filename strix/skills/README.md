@@ -30,6 +30,7 @@ The skills are dynamically injected into the agent's system prompt, allowing it 
 | Category | Purpose |
 |----------|---------|
 | **`/vulnerabilities`** | Advanced testing techniques for core vulnerability classes like authentication bypasses, business logic flaws, and race conditions |
+| **`/standards`** | Lean coverage maps for OWASP Top 10, ASVS, API Top 10, PCI DSS (technical subset), and NIST SSDF/800-53 — spawn specialists from the table, do not dump the full standard |
 | **`/frameworks`** | Specific testing methods for popular frameworks e.g. Django, Express, FastAPI, and Next.js |
 | **`/technologies`** | Specialized techniques for third-party services such as Supabase, Firebase, Auth0, and payment gateways |
 | **`/protocols`** | Protocol-specific testing patterns for GraphQL, WebSocket, OAuth, and other communication standards |

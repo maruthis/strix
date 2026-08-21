@@ -94,6 +94,9 @@ Examples:
   strix --target example.com --instruction-file ./instructions.txt
   strix --target https://app.com --instruction-file /path/to/detailed_instructions.md
 
+  # Preload a standards coverage map on the root agent (repeatable, max 5)
+  strix --target ./my-project --skill owasp_top_10 --skill pci_dss
+
   # Extra files placed in the sandbox workspace
   strix --target ./my-project --workspace-file ./wordlist.txt
   strix --target https://app.com --workspace-file ./openapi.yaml:specs/openapi.yaml
@@ -173,6 +176,19 @@ Examples:
         help=(
             "Run in non-interactive mode (no TUI, exits on completion). "
             "Default is interactive mode with TUI."
+        ),
+    )
+
+    parser.add_argument(
+        "--skill",
+        dest="skills",
+        action="append",
+        metavar="NAME",
+        help=(
+            "Preload a skill into the root agent (repeatable, max 5). "
+            "Names match files under strix/skills/<category>/<name>.md "
+            "(for example '--skill owasp_top_10 --skill pci_dss'). "
+            "Category-qualified names (standards/owasp_asvs) are also accepted."
         ),
     )
 
@@ -289,6 +305,15 @@ Examples:
         args.workspace_files = resolve_workspace_files(getattr(args, "workspace_file", None))
     except ValueError as error:
         parser.error(f"--workspace-file: {error}")
+
+    requested_skills = [name.strip() for name in (args.skills or []) if name and name.strip()]
+    if requested_skills:
+        from strix.skills import validate_requested_skills
+
+        skill_error = validate_requested_skills(requested_skills)
+        if skill_error:
+            parser.error(f"--skill: {skill_error}")
+    args.skills = requested_skills
 
     args.user_explicit_instruction = args.instruction if args.resume else None
     # What the user actually asked for, kept apart from args.instruction because
@@ -417,3 +442,7 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
     persisted_scan_mode = state.get("scan_mode")
     if persisted_scan_mode and args.scan_mode == "deep":
         args.scan_mode = persisted_scan_mode
+    if not args.skills:
+        persisted_skills = state.get("skills") or []
+        if isinstance(persisted_skills, list):
+            args.skills = [s for s in persisted_skills if isinstance(s, str) and s]

@@ -229,6 +229,40 @@ def test_builtin_skill_still_loads_when_not_overridden(tmp_path: Path) -> None:
     assert load_skills(["scan_modes/deep"]).get("deep")
 
 
+def test_standards_catalog_includes_owasp_top_10() -> None:
+    available = get_available_skills()
+    names = {skill["name"] for skill in available["standards"]}
+    assert names == {
+        "nist_ssdf",
+        "owasp_api_top_10",
+        "owasp_asvs",
+        "owasp_top_10",
+        "pci_dss",
+    }
+    assert validate_requested_skills(["owasp_top_10"]) is None
+    assert validate_requested_skills(["standards/owasp_top_10"]) is None
+
+
+def test_system_prompt_inlines_owasp_top_10_skill() -> None:
+    prompt = render_system_prompt(skills=["owasp_top_10"], scan_mode="quick", is_root=True)
+
+    assert "<owasp_top_10>" in prompt
+    assert "OWASP Top 10:2025" in prompt
+    assert "A01:2025" in prompt
+
+
+def test_new_vuln_skills_are_selectable() -> None:
+    names = get_all_skill_names()
+    for skill in (
+        "cryptographic_failures",
+        "security_misconfiguration",
+        "session_management",
+        "unrestricted_resource_consumption",
+    ):
+        assert skill in names
+        assert validate_requested_skills([skill]) is None
+
+
 def test_missing_skill_is_skipped(tmp_path: Path) -> None:
     register_skill_dir(tmp_path)
     assert load_skills(["does_not_exist"]) == {}

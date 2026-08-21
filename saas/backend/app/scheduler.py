@@ -90,6 +90,7 @@ async def _fire(db, schedule: models.PentestSchedule, now) -> None:  # noqa: ANN
             schedule.target_type,
             schedule.target_id,
             schedule.scan_mode,
+            skills=schedule.skills,
         )
         record_audit(db, org.id, None, "pentest_schedule.fired", schedule.target_id, {"pentest_id": pentest.id})
     except Exception:  # noqa: BLE001 - e.g. target deleted since the schedule was made

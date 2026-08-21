@@ -54,6 +54,22 @@ Core vulnerability classes with deep exploitation techniques.
 | `information_disclosure`              | Data leakage, error-based enumeration                  |
 | `subdomain_takeover`                  | Dangling DNS, cloud resource claims                    |
 | `broken_function_level_authorization` | Privilege escalation, role bypasses                    |
+| `cryptographic_failures`              | TLS, weak hashing, secrets at rest, cookie/token crypto |
+| `security_misconfiguration`           | CORS, headers, default creds, debug, leftovers          |
+| `session_management`                  | Fixation, timeout, rotation, cookie flags               |
+| `unrestricted_resource_consumption`   | Rate limits, pagination abuse, expensive endpoints      |
+
+### Standards
+
+Lean coverage maps. Preload on the root agent with `--skill` or `create_agent`/`load_skill`. Each map lists which specialist skills to spawn and how to tag findings. Not a copy of the standard — policy/HR/physical controls are out of scope.
+
+| Skill               | Coverage                                                      |
+| ------------------- | ------------------------------------------------------------- |
+| `owasp_top_10`      | OWASP Top 10:2025 — spawn a specialist per testable category  |
+| `owasp_asvs`        | ASVS L1/L2 testable chapters                                  |
+| `owasp_api_top_10`  | API Security Top 10:2023                                      |
+| `pci_dss`           | PCI DSS 4.0 technical subset (reqs 2, 4, 6, 8, 11)            |
+| `nist_ssdf`         | NIST SSDF + 800-53 technical overlay (SA, SI, SC, IA, AC)     |
 
 ### Frameworks
 

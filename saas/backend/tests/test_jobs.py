@@ -252,6 +252,7 @@ async def test_run_real_scan_success_path(monkeypatch):
         }
     ]
     assert calls["local_sources"] == [{"source_path": f"/tmp/cloned/{pentest.id}", "workspace_subdir": "widgets", "protect_metadata": False}]
+    assert calls["scan_config"]["skills"] == ["standards/owasp_top_10"]
 
 
 async def test_run_real_scan_domain_target_has_no_local_sources(monkeypatch):
@@ -282,6 +283,50 @@ async def test_run_real_scan_domain_target_has_no_local_sources(monkeypatch):
     assert result == []
     assert calls["local_sources"] == []
     assert calls["scan_config"]["targets"] == [{"type": "web_application", "details": {"target_url": "https://app.example.com"}}]
+
+
+async def test_run_real_scan_qualifies_persisted_standard_skills(monkeypatch):
+    calls = {}
+
+    async def fake_run_strix_scan(*, scan_config, scan_id, image, local_sources):
+        calls["scan_config"] = scan_config
+
+    _install_fake_strix_module(monkeypatch, fake_run_strix_scan, clone_repository=lambda url, run_name, dest_name, ref: (f"/tmp/cloned/{run_name}", "fake-sha"))
+
+    db = SessionLocal()
+    try:
+        org, repo = _make_org_and_repo(db)
+        pentest = _make_pentest(db, org, repo)
+        pentest.skills = ["owasp_top_10", "pci_dss"]
+        db.commit()
+        db.refresh(pentest)
+    finally:
+        db.close()
+
+    await jobs._run_real_scan(db, pentest, None)
+    assert calls["scan_config"]["skills"] == ["standards/owasp_top_10", "standards/pci_dss"]
+
+
+async def test_run_real_scan_falls_back_to_owasp_when_skills_are_unknown(monkeypatch):
+    calls = {}
+
+    async def fake_run_strix_scan(*, scan_config, scan_id, image, local_sources):
+        calls["scan_config"] = scan_config
+
+    _install_fake_strix_module(monkeypatch, fake_run_strix_scan, clone_repository=lambda url, run_name, dest_name, ref: (f"/tmp/cloned/{run_name}", "fake-sha"))
+
+    db = SessionLocal()
+    try:
+        org, repo = _make_org_and_repo(db)
+        pentest = _make_pentest(db, org, repo)
+        pentest.skills = ["not_a_standard"]
+        db.commit()
+        db.refresh(pentest)
+    finally:
+        db.close()
+
+    await jobs._run_real_scan(db, pentest, None)
+    assert calls["scan_config"]["skills"] == ["standards/owasp_top_10"]
 
 
 async def test_run_real_scan_reads_and_translates_real_findings(monkeypatch, tmp_path):

@@ -128,6 +128,52 @@ export function Toggle({ checked, onChange, disabled }: { checked: boolean; onCh
   );
 }
 
+export function CheckboxGroup({
+  values,
+  onChange,
+  options,
+  minSelected = 0,
+}: {
+  values: string[];
+  onChange: (next: string[]) => void;
+  options: { value: string; label: string; description?: string }[];
+  minSelected?: number;
+}) {
+  return (
+    <div role="group" className="max-h-48 overflow-y-auto rounded-lg border border-[#2a2a2a]">
+      {options.map((option) => {
+        const checked = values.includes(option.value);
+        const disableUncheck = checked && values.length <= minSelected;
+        return (
+          <label
+            key={option.value}
+            className="flex cursor-pointer items-start gap-2 border-b border-[#1a1a1a] px-3 py-2 last:border-0 hover:bg-[rgba(255,255,255,0.03)]"
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={disableUncheck}
+              onChange={() => {
+                if (checked) {
+                  if (values.length <= minSelected) return;
+                  onChange(values.filter((value) => value !== option.value));
+                  return;
+                }
+                onChange([...values, option.value]);
+              }}
+              className="mt-1 accent-white"
+            />
+            <span>
+              <span className="block text-sm text-white">{option.label}</span>
+              {option.description && <span className="block text-xs text-[#666]">{option.description}</span>}
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="mb-4 block">
