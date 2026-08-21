@@ -123,6 +123,30 @@ delegating to specialists rather than doing everything itself. (The
 so the `.jinja` file itself may branch further — not fully verified, see
 §10.)
 
+**Requested skills are validated the same way for the root and for a
+spawned child.** `strix/skills/__init__.py`'s `validate_requested_skills(names, max_skills=5)`
+rejects more than 5 names, an unknown name, or a bare (non-category-qualified)
+name that's ambiguous across categories — the exact check `create_agent`
+already ran for a child's `skills` argument (§3) is reused for the root
+agent's own preloaded skill list, requested via the CLI's `--skill NAME`
+flag (repeatable; persisted across `--resume`, see §8.1) or a library
+caller's `scan_config["skills"]`.
+
+Beyond the always-loaded skills above, `strix/skills/` ships a curated,
+selectable catalog meant for this validated-selection path rather than
+automatic loading:
+
+| Category | Skills | What they do |
+|---|---|---|
+| `standards/` | `owasp_top_10`, `owasp_asvs`, `owasp_api_top_10`, `pci_dss`, `nist_ssdf` | A compliance/standards coverage map — nudges the root agent to spawn one specialist per testable category/control family from that standard, rather than leaving coverage entirely emergent. |
+| `vulnerabilities/` | `cryptographic_failures`, `security_misconfiguration`, `session_management`, `unrestricted_resource_consumption` | Deep-dive guidance for one specific vulnerability class, for a targeted scan rather than a broad standard. |
+
+`saas/backend/app/standard_skills.py` keeps its own small allowlist of the
+`standards/` names (so mock-mode pentests work without the optional
+`real-scan` extra installed) and maps a SaaS `Pentest`/`PentestSchedule`'s
+selected skills to `scan_config["skills"]` at real-scan time — see
+`docs/saas-architecture.md` §6.3.
+
 ## 3. Spawning and the agent-tree execution model
 
 Spawning is **entirely tool-driven** — nothing spawns automatically.
@@ -585,8 +609,11 @@ own try/except so a SARIF bug never blocks the rest), and `run.json`.
   (repeatable), `--target-list`, `--instruction`/`--instruction-file`,
   `--workspace-file` (mount extra read-only files), `-n`/`--non-interactive`,
   `-m`/`--scan-mode {quick,standard,deep}`, `--scope-mode {auto,diff,full}`
-  + `--diff-base`, `--config`, `--max-budget-usd`, `--max-turns`,
-  `--resume RUN_NAME`.
+  + `--diff-base`, `--skill NAME` (repeatable, max 5 — preloads a
+  validated skill onto the root agent, e.g. `--skill owasp_top_10 --skill
+  pci_dss`; see §2), `--config`, `--max-budget-usd`, `--max-turns`,
+  `--resume RUN_NAME` (a resumed run restores its original `--skill`
+  selection unless new ones are explicitly passed).
 - **Interactive TUI** (`strix/interface/tui/`) — a Go-backed terminal UI
   driven from Python (`tui/sidecar.py`, `tui/runtime.py`,
   `tui/live_view.py`); the default experience for a non-`-n` run.
@@ -645,13 +672,17 @@ wire it up or expose it to pentest agents today.
 
 `saas/backend` depends on this engine as a library (`strix-agent` package,
 an editable path dependency) and calls `run_strix_scan(...)` directly from
-its job queue — it does not go through the CLI/TUI at all. See
-`docs/saas-architecture.md` §6.3 for that integration's own sequence
-diagram (repo cloning with per-org credentials, Docker sandbox handoff,
-findings translation back into the SaaS's own `Issue` rows) and §8 for the
-one deliberate, documented exception where `saas/` work required a small
-edit to this engine (`strix/core/inputs.py`'s `make_model_settings`, to
-add `allowed_openai_params` for strict LiteLLM-proxy providers).
+its job queue — for both a pentest and a real PR review (diff-scoped, see
+`docs/saas-architecture.md` §6.4) — not through the CLI/TUI at all. See
+`docs/saas-architecture.md` §6.3 for the pentest integration's own
+sequence diagram (repo cloning with per-org credentials, Docker sandbox
+handoff, findings translation back into the SaaS's own `Issue` rows) and
+§8 there for the running list of deliberate, documented exceptions where
+`saas/`-driven work required a small, intentional edit to this engine
+(`allowed_openai_params` for strict LiteLLM-proxy providers; the Tier 1-3
+non-determinism mitigations in §5.2 and `finish_scan`'s
+`coverage_checklist`; branch/tag/commit ref-pinning in `clone_repository`;
+the `standards`/`vulnerabilities` skill catalog in §2).
 §5.2's baseline-scan `source`/`coverage_category` fields pass straight
 through `_translate_real_finding` in `saas/backend/app/jobs.py` into the
 `Issue.source` column, and the frontend renders an "Automatically
