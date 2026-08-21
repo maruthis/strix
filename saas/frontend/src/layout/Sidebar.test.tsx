@@ -32,13 +32,18 @@ describe("Sidebar", () => {
     expect(screen.getByText("a@example.com")).toBeInTheDocument();
   });
 
-  it("renders every nav item, locking Supply Chain/Networks", () => {
+  it("renders every nav item, locking Networks", () => {
     renderWithProviders(<Sidebar />);
     expect(screen.getByText("Dashboard")).toBeInTheDocument();
-    expect(screen.getByText("Supply Chain")).toBeInTheDocument();
     expect(screen.getByText("Networks")).toBeInTheDocument();
     expect(screen.getByText("Integrations")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Integrations/ })).toBeInTheDocument();
+  });
+
+  it("does not render the removed Supply Chain nav item or Refer & earn button", () => {
+    renderWithProviders(<Sidebar />);
+    expect(screen.queryByText("Supply Chain")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Refer & earn/)).not.toBeInTheDocument();
   });
 
   it("opens the org switcher and switches org on click", async () => {

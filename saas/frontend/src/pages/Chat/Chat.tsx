@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Check, Github, Gitlab, Paperclip, X } from "lucide-react";
 import { api } from "../../api/client";
-import type { ChatMessage, ChatSession, ChatSuggestion } from "../../api/types";
+import type { ChatMessage, ChatSession, ChatSuggestion, Repository } from "../../api/types";
+import { Modal } from "../../components/shared/Modal";
+import { TextInput } from "../../components/shared/Form";
 import { cn } from "../../lib/cn";
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -20,6 +22,8 @@ export default function Chat() {
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [selectedRepos, setSelectedRepos] = useState<Repository[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: suggestionsData } = useQuery({
@@ -39,7 +43,10 @@ export default function Chat() {
         setSession(currentSession);
         queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
       }
-      return api.post<ChatMessage[]>(`/api/chat/sessions/${currentSession.id}/messages`, { content });
+      return api.post<ChatMessage[]>(`/api/chat/sessions/${currentSession.id}/messages`, {
+        content,
+        repository_ids: selectedRepos.map((r) => r.id),
+      });
     },
     onSuccess: (newMessages) => {
       setMessages((prev) => [...prev, ...newMessages]);
@@ -54,6 +61,20 @@ export default function Chat() {
 
   const suggestions = suggestionsData?.suggestions[category] ?? [];
 
+  const repoPicker = (
+    <>
+      <RepoChips repos={selectedRepos} onRemove={(id) => setSelectedRepos((prev) => prev.filter((r) => r.id !== id))} />
+      <RepoPickerModal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        selected={selectedRepos}
+        onToggle={(repo) =>
+          setSelectedRepos((prev) => (prev.some((r) => r.id === repo.id) ? prev.filter((r) => r.id !== repo.id) : [...prev, repo]))
+        }
+      />
+    </>
+  );
+
   if (session || messages.length > 0) {
     return (
       <div className="mx-auto flex h-full max-w-3xl flex-col">
@@ -62,7 +83,7 @@ export default function Chat() {
             <div
               key={m.id}
               className={cn(
-                "max-w-[85%] rounded-xl px-4 py-2.5 text-sm",
+                "max-w-[85%] whitespace-pre-wrap rounded-xl px-4 py-2.5 text-sm",
                 m.role === "user" ? "ml-auto bg-white text-black" : "bg-[rgba(255,255,255,0.05)] text-white"
               )}
             >
@@ -71,7 +92,8 @@ export default function Chat() {
           ))}
           {sendMessage.isPending && <div className="text-xs text-[#666]">Strix is thinking…</div>}
         </div>
-        <ChatInput value={input} onChange={setInput} onSubmit={submit} busy={sendMessage.isPending} />
+        {repoPicker}
+        <ChatInput value={input} onChange={setInput} onSubmit={submit} busy={sendMessage.isPending} onAddRepositories={() => setPickerOpen(true)} />
       </div>
     );
   }
@@ -80,7 +102,8 @@ export default function Chat() {
     <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center">
       <h1 className="mb-6 text-2xl font-semibold text-white">What do you want to secure today?</h1>
       <div className="w-full">
-        <ChatInput value={input} onChange={setInput} onSubmit={submit} busy={sendMessage.isPending} />
+        {repoPicker}
+        <ChatInput value={input} onChange={setInput} onSubmit={submit} busy={sendMessage.isPending} onAddRepositories={() => setPickerOpen(true)} />
       </div>
 
       <div className="mt-6 flex flex-wrap justify-center gap-1.5">
@@ -114,16 +137,92 @@ export default function Chat() {
   );
 }
 
+function RepoChips({ repos, onRemove }: { repos: Repository[]; onRemove: (id: string) => void }) {
+  if (repos.length === 0) return null;
+  return (
+    <div className="mb-2 flex flex-wrap gap-1.5">
+      {repos.map((r) => (
+        <span key={r.id} className="flex items-center gap-1.5 rounded-full border border-[#2a2a2a] bg-[rgba(255,255,255,0.03)] px-2.5 py-1 text-xs text-[#ccc]">
+          {r.provider === "gitlab" ? <Gitlab size={11} /> : <Github size={11} />}
+          {r.full_name}
+          <button type="button" onClick={() => onRemove(r.id)} className="text-[#666] hover:text-white">
+            <X size={11} />
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function RepoPickerModal({
+  open,
+  onClose,
+  selected,
+  onToggle,
+}: {
+  open: boolean;
+  onClose: () => void;
+  selected: Repository[];
+  onToggle: (repo: Repository) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const { data: repos, isLoading } = useQuery({
+    queryKey: ["repositories"],
+    queryFn: () => api.get<Repository[]>("/api/repositories"),
+    enabled: open,
+  });
+
+  const filtered = (repos ?? []).filter((r) => r.full_name.toLowerCase().includes(search.toLowerCase()));
+  const selectedIds = new Set(selected.map((r) => r.id));
+
+  return (
+    <Modal open={open} onClose={onClose} title="Add repositories" description="Pick which connected repositories Strix should scan for this request.">
+      <TextInput autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search repositories" className="mb-3" />
+      <div className="max-h-72 space-y-1.5 overflow-y-auto">
+        {!isLoading && (repos?.length ?? 0) === 0 && (
+          <p className="py-6 text-center text-sm text-[#666]">No connected repositories yet — add one from the Repositories page.</p>
+        )}
+        {!isLoading && (repos?.length ?? 0) > 0 && filtered.length === 0 && (
+          <p className="py-6 text-center text-sm text-[#666]">No repositories match "{search}".</p>
+        )}
+        {filtered.map((repo) => {
+          const isSelected = selectedIds.has(repo.id);
+          return (
+            <button
+              key={repo.id}
+              type="button"
+              onClick={() => onToggle(repo)}
+              className={cn(
+                "flex w-full items-center gap-2 rounded-lg border px-3 py-2.5 text-left text-sm hover:bg-[rgba(255,255,255,0.04)]",
+                isSelected ? "border-white/40 text-white" : "border-[#222] text-white"
+              )}
+            >
+              {repo.provider === "gitlab" ? <Gitlab size={15} className="shrink-0 text-[#888]" /> : <Github size={15} className="shrink-0 text-[#888]" />}
+              <span className="flex-1 break-all">{repo.full_name}</span>
+              {isSelected && <Check size={15} className="shrink-0 text-white" />}
+            </button>
+          );
+        })}
+      </div>
+      <button type="button" onClick={onClose} className="mt-4 w-full rounded-lg bg-white py-2 text-sm font-medium text-black hover:bg-white/90">
+        Done{selected.length > 0 ? ` (${selected.length} selected)` : ""}
+      </button>
+    </Modal>
+  );
+}
+
 function ChatInput({
   value,
   onChange,
   onSubmit,
   busy,
+  onAddRepositories,
 }: {
   value: string;
   onChange: (v: string) => void;
   onSubmit: (v: string) => void;
   busy: boolean;
+  onAddRepositories: () => void;
 }) {
   return (
     <form
@@ -147,7 +246,11 @@ function ChatInput({
         className="w-full resize-none bg-transparent text-sm text-white outline-none placeholder:text-[#555]"
       />
       <div className="mt-2 flex items-center justify-between">
-        <button type="button" className="flex items-center gap-1.5 rounded-lg border border-[#2a2a2a] px-2.5 py-1.5 text-xs text-[#888] hover:text-white">
+        <button
+          type="button"
+          onClick={onAddRepositories}
+          className="flex items-center gap-1.5 rounded-lg border border-[#2a2a2a] px-2.5 py-1.5 text-xs text-[#888] hover:text-white"
+        >
           <Paperclip size={13} /> Add repositories
         </button>
         <button

@@ -48,6 +48,15 @@ export interface RepoCommit {
   author_date: string | null;
 }
 
+export interface RepoPullRequest {
+  number: number;
+  title: string;
+  author: string;
+  source_branch: string | null;
+  target_branch: string | null;
+  url: string | null;
+}
+
 export interface InstallableRepo {
   full_name: string;
   default_branch: string;
@@ -89,6 +98,8 @@ export interface PentestSchedule {
   scan_mode: string;
   cron_expr: string;
   enabled: boolean;
+  last_run_at: string | null;
+  next_run_at: string | null;
 }
 
 export type Severity = "critical" | "high" | "medium" | "low";
@@ -116,6 +127,9 @@ export interface Issue {
   target: string;
   endpoint: string;
   fix_effort: string;
+  // "baseline_scan" for a Tier 3 deterministic finding (trivy/gitleaks/kube-linter,
+  // filed before the agent loop starts); null for everything an agent validated.
+  source: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -126,7 +140,7 @@ export interface IssuesResponse {
   status_counts: Record<string, number>;
 }
 
-export type PRReviewStatus = "awaiting_merge" | "needs_attention" | "merged_with_open_findings" | "passed";
+export type PRReviewStatus = "running" | "awaiting_merge" | "needs_attention" | "merged_with_open_findings" | "passed" | "failed";
 
 export interface PRReview {
   id: string;
@@ -137,6 +151,9 @@ export interface PRReview {
   author: string;
   status: PRReviewStatus;
   findings_count: number;
+  target_branch: string | null;
+  resolved_head_sha: string | null;
+  error: string | null;
   created_at: string;
   updated_at: string;
 }

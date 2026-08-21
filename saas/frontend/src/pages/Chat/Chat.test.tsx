@@ -88,12 +88,80 @@ describe("Chat", () => {
     expect(submitButtons[0]).toBeDisabled();
   });
 
-  it("has an inert 'Add repositories' affordance", async () => {
-    mockFetchImpl(async () => jsonRes(SUGGESTIONS));
+  it("opens the repository picker, selects a repo, and shows it as a removable chip", async () => {
+    mockFetchImpl(async (url) => {
+      if (url.includes("/api/chat/suggestions")) return jsonRes(SUGGESTIONS);
+      if (url.endsWith("/api/repositories")) {
+        return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
+      }
+      return jsonRes({});
+    });
     renderWithProviders(<Chat />);
     await screen.findByText("What do you want to secure today?");
-    const button = screen.getByRole("button", { name: /Add repositories/ });
-    expect(button).toBeInTheDocument();
-    await userEvent.click(button);
+
+    await userEvent.click(screen.getByRole("button", { name: /Add repositories/ }));
+    await screen.findByText("acme/widgets");
+    await userEvent.click(screen.getByText("acme/widgets"));
+    await userEvent.click(screen.getByRole("button", { name: /Done/ }));
+
+    // The picker closed and the selection now shows as a chip.
+    expect(screen.queryByText(/Pick which connected repositories/)).not.toBeInTheDocument();
+    expect(screen.getByText("acme/widgets")).toBeInTheDocument();
+  });
+
+  it("removes a selected repository chip", async () => {
+    mockFetchImpl(async (url) => {
+      if (url.includes("/api/chat/suggestions")) return jsonRes(SUGGESTIONS);
+      if (url.endsWith("/api/repositories")) {
+        return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
+      }
+      return jsonRes({});
+    });
+    renderWithProviders(<Chat />);
+    await screen.findByText("What do you want to secure today?");
+
+    await userEvent.click(screen.getByRole("button", { name: /Add repositories/ }));
+    await screen.findByText("acme/widgets");
+    await userEvent.click(screen.getByText("acme/widgets"));
+    await userEvent.click(screen.getByRole("button", { name: /Done/ }));
+    await screen.findByText("acme/widgets");
+
+    // The chip's own remove (X) button — the last button inside the chip.
+    const chipContainer = screen.getByText("acme/widgets").closest("span")!;
+    await userEvent.click(chipContainer.querySelector("button")!);
+    expect(screen.queryByText("acme/widgets")).not.toBeInTheDocument();
+  });
+
+  it("sends the selected repository_ids along with the message", async () => {
+    const fetchMock = mockFetchImpl(async (url, init) => {
+      if (url.includes("/api/chat/suggestions")) return jsonRes(SUGGESTIONS);
+      if (url.endsWith("/api/repositories")) {
+        return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
+      }
+      if (url.includes("/sessions") && !url.includes("/messages") && init?.method === "POST") {
+        return jsonRes({ id: "s1", title: "New chat", category: "web", created_at: new Date().toISOString() });
+      }
+      if (url.includes("/messages")) {
+        return jsonRes([
+          { id: "m1", role: "user", content: "Audit this", created_at: new Date().toISOString() },
+          { id: "m2", role: "assistant", content: "Started a real scan for: acme/widgets.", created_at: new Date().toISOString() },
+        ]);
+      }
+      return jsonRes({});
+    });
+    renderWithProviders(<Chat />);
+    await screen.findByText("What do you want to secure today?");
+
+    await userEvent.click(screen.getByRole("button", { name: /Add repositories/ }));
+    await screen.findByText("acme/widgets");
+    await userEvent.click(screen.getByText("acme/widgets"));
+    await userEvent.click(screen.getByRole("button", { name: /Done/ }));
+
+    await userEvent.type(screen.getByPlaceholderText("Tell Strix what to do…"), "Audit this{Enter}");
+    await screen.findByText("Started a real scan for: acme/widgets.");
+
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).includes("/messages") && (c[1] as RequestInit | undefined)?.method === "POST")!;
+    const body = JSON.parse((call[1] as RequestInit).body as string);
+    expect(body.repository_ids).toEqual(["r1"]);
   });
 });

@@ -65,6 +65,8 @@ A run that spawns only a couple of narrowly-scoped agents (e.g. secrets + depend
 
 These are the same categories `finish_scan`'s `coverage_checklist` parameter requires an entry for — it will reject the call if any is missing, empty, or answered with a one-word dismissal instead of a real note. Treat that gate as a check on work you should have already done, not a form to fill in retroactively: if you reach `finish_scan` and don't have a genuine answer for a category, that means go spawn the agent now, not write something plausible-sounding to get past the gate.
 
+**Baseline scan.** Before your first turn, the harness already ran a deterministic tool-driven baseline scan against the source tree for three of the categories above — `dependencies` (`trivy fs`), `secrets` (`gitleaks`, full git history), and `infrastructure` (IaC/CI linting) — and filed anything it found directly (`list_reports` entries from it carry `source: baseline_scan`; a one-line summary is also injected into your own system prompt context). This is not a substitute for the dedicated agents above — a nonzero baseline count still needs an agent to triage it (confirm reachability/exploitability, chain it with other findings), not just rubber-stamp it — but it does mean you're never starting those three categories from zero, and `finish_scan` will check that your checklist note for each actually accounts for what the baseline scan found rather than contradicting or ignoring it.
+
 ## Coordination Principles
 
 **Task Independence**

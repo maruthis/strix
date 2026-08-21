@@ -22,6 +22,9 @@ const REVIEW = {
   author: "octocat",
   status: "needs_attention",
   findings_count: 2,
+  target_branch: "main",
+  resolved_head_sha: "abc1234",
+  error: null,
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
@@ -51,6 +54,21 @@ describe("PRReviewsList", () => {
     renderWithProviders(<PRReviewsList />);
     await screen.findByText(/Add withdraw endpoint/);
     await userEvent.click(screen.getByText("Needs Attention"));
+  });
+
+  it("shows a scanning indicator and no finding count while a review is running", async () => {
+    mockFetchJson({ body: { items: [{ ...REVIEW, status: "running", findings_count: 0 }], counts: { all: 1 } } });
+    renderWithProviders(<PRReviewsList />);
+    await screen.findByText(/Add withdraw endpoint/);
+    expect(screen.getByText(/scanning…/)).toBeInTheDocument();
+    expect(screen.queryByText(/finding\(s\)/)).not.toBeInTheDocument();
+  });
+
+  it("shows the failure reason for a failed review", async () => {
+    mockFetchJson({ body: { items: [{ ...REVIEW, status: "failed", error: "scan_failed" }], counts: { all: 1 } } });
+    renderWithProviders(<PRReviewsList />);
+    await screen.findByText(/Add withdraw endpoint/);
+    expect(screen.getByText("scan_failed")).toBeInTheDocument();
   });
 
   it("filters by search text", async () => {
@@ -159,10 +177,11 @@ describe("PRReviewsList", () => {
   });
 
   describe("trigger review modal", () => {
-    it("submits a manual review and shows the findings toast", async () => {
-      mockFetchImpl(async (url, init) => {
+    it("submits a manual review and shows the queued toast", async () => {
+      const fetchMock = mockFetchImpl(async (url, init) => {
         if (url.endsWith("/api/repositories")) return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
-        if (init?.method === "POST" && url.endsWith("/api/pr-reviews")) return jsonRes({ ...REVIEW, status: "needs_attention", findings_count: 3 });
+        if (url.endsWith("/pull-requests")) return jsonRes([]);
+        if (init?.method === "POST" && url.endsWith("/api/pr-reviews")) return jsonRes({ ...REVIEW, status: "running", findings_count: 0, target_branch: null });
         return jsonRes({ items: [], counts: { all: 0 } });
       });
       renderWithProviders(<PRReviewsList />);
@@ -174,25 +193,41 @@ describe("PRReviewsList", () => {
       await userEvent.type(screen.getByPlaceholderText("42"), "7");
       await userEvent.type(screen.getByPlaceholderText("Add wallet withdraw endpoint"), "Some PR");
       await userEvent.click(screen.getByRole("button", { name: "Run review" }));
+
+      await waitFor(() => {
+        const call = fetchMock.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === "POST");
+        expect(call).toBeTruthy();
+        const body = JSON.parse((call![1] as RequestInit).body as string);
+        // No PR was picked from a live list, so no target_branch is sent —
+        // the backend falls back to the repository's default branch.
+        expect(body.target_branch).toBeUndefined();
+      });
     });
 
-    it("shows the passed toast branch when a review has no findings", async () => {
-      mockFetchImpl(async (url, init) => {
+    it("sends the picked PR's target_branch when submitting", async () => {
+      const fetchMock = mockFetchImpl(async (url, init) => {
         if (url.endsWith("/api/repositories")) return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
-        if (init?.method === "POST" && url.endsWith("/api/pr-reviews")) return jsonRes({ ...REVIEW, status: "passed", findings_count: 0 });
+        if (url.endsWith("/pull-requests")) {
+          return jsonRes([{ number: 42, title: "Add wallet withdraw endpoint", author: "octocat", source_branch: "feature/withdraw", target_branch: "develop", url: null }]);
+        }
+        if (init?.method === "POST" && url.endsWith("/api/pr-reviews")) return jsonRes({ ...REVIEW, status: "running", findings_count: 0, target_branch: "develop" });
         return jsonRes({ items: [], counts: { all: 0 } });
       });
       renderWithProviders(<PRReviewsList />);
       await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
       await userEvent.click(await screen.findByText("acme/widgets"));
+      await screen.findByText("Add wallet withdraw endpoint");
+      await userEvent.click(screen.getByText("Add wallet withdraw endpoint"));
+
       await screen.findByText("PR number");
+      await userEvent.click(screen.getByRole("button", { name: "Run review" }));
 
-      await userEvent.type(screen.getByPlaceholderText("42"), "8");
-      await userEvent.type(screen.getByPlaceholderText("Add wallet withdraw endpoint"), "Another PR");
-
-      const submit = screen.getByRole("button", { name: "Run review" });
-      expect(submit).not.toBeDisabled();
-      await userEvent.click(submit);
+      await waitFor(() => {
+        const call = fetchMock.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === "POST");
+        expect(call).toBeTruthy();
+        const body = JSON.parse((call![1] as RequestInit).body as string);
+        expect(body.target_branch).toBe("develop");
+      });
     });
 
     it("filters the repository list by search, and lets you change the selection", async () => {
@@ -203,6 +238,7 @@ describe("PRReviewsList", () => {
             { id: "r2", provider: "github", full_name: "acme/gadgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 },
           ]);
         }
+        if (url.endsWith("/pull-requests")) return jsonRes([]);
         return jsonRes({ items: [], counts: { all: 0 } });
       });
       renderWithProviders(<PRReviewsList />);
@@ -234,6 +270,7 @@ describe("PRReviewsList", () => {
         if (url.endsWith("/api/repositories")) {
           return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
         }
+        if (url.endsWith("/pull-requests")) return jsonRes([]);
         return jsonRes({ items: [], counts: { all: 0 } });
       });
       renderWithProviders(<PRReviewsList />);
@@ -252,6 +289,77 @@ describe("PRReviewsList", () => {
       const modal2 = screen.getByText("Review a pull request").closest("div")!.parentElement!;
       await userEvent.click(modal2.querySelector("button")!);
       expect(screen.queryByText("Review a pull request")).not.toBeInTheDocument();
+    });
+
+    it("lists open pull requests once a repository with a live integration is selected, and lets you pick one", async () => {
+      mockFetchImpl(async (url, init) => {
+        if (url.endsWith("/api/repositories")) {
+          return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
+        }
+        if (url.endsWith("/pull-requests")) {
+          return jsonRes([
+            { number: 42, title: "Add wallet withdraw endpoint", author: "octocat", source_branch: "feature/withdraw", target_branch: "main", url: "https://github.com/acme/widgets/pull/42" },
+            { number: 7, title: "Fix CORS misconfiguration", author: "hexbot", source_branch: "fix/cors", target_branch: "main", url: "https://github.com/acme/widgets/pull/7" },
+          ]);
+        }
+        if (init?.method === "POST" && url.endsWith("/api/pr-reviews")) return jsonRes({ ...REVIEW, status: "needs_attention", findings_count: 1 });
+        return jsonRes({ items: [], counts: { all: 0 } });
+      });
+      renderWithProviders(<PRReviewsList />);
+      await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
+      await userEvent.click(await screen.findByText("acme/widgets"));
+
+      await screen.findByText("Fix CORS misconfiguration");
+      expect(screen.getByText("by octocat")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByText("Fix CORS misconfiguration"));
+
+      // Picking a PR jumps to the (still-editable) manual form, prefilled.
+      await screen.findByText("PR number");
+      expect(screen.getByPlaceholderText("42")).toHaveValue(7);
+      expect(screen.getByPlaceholderText("Add wallet withdraw endpoint")).toHaveValue("Fix CORS misconfiguration");
+
+      await userEvent.click(screen.getByRole("button", { name: "Run review" }));
+    });
+
+    it("falls back straight to manual entry when there are no open pull requests", async () => {
+      mockFetchImpl(async (url) => {
+        if (url.endsWith("/api/repositories")) {
+          return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
+        }
+        if (url.endsWith("/pull-requests")) return jsonRes([]);
+        return jsonRes({ items: [], counts: { all: 0 } });
+      });
+      renderWithProviders(<PRReviewsList />);
+      await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
+      await userEvent.click(await screen.findByText("acme/widgets"));
+
+      await screen.findByText("PR number");
+      expect(screen.queryByText("Loading open pull requests…")).not.toBeInTheDocument();
+    });
+
+    it("lets you switch from the pull-request picker to manual entry and back", async () => {
+      mockFetchImpl(async (url) => {
+        if (url.endsWith("/api/repositories")) {
+          return jsonRes([{ id: "r1", provider: "github", full_name: "acme/widgets", default_branch: "main", auto_review_enabled: true, last_tested_at: null, open_issues_count: 0 }]);
+        }
+        if (url.endsWith("/pull-requests")) {
+          return jsonRes([{ number: 42, title: "Add wallet withdraw endpoint", author: "octocat", source_branch: "feature/withdraw", target_branch: "main", url: null }]);
+        }
+        return jsonRes({ items: [], counts: { all: 0 } });
+      });
+      renderWithProviders(<PRReviewsList />);
+      await userEvent.click(screen.getByRole("button", { name: "Review a Pull Request" }));
+      await userEvent.click(await screen.findByText("acme/widgets"));
+
+      await screen.findByText("Add wallet withdraw endpoint");
+      await userEvent.click(screen.getByText("Can't find it? Enter the PR number manually"));
+
+      await screen.findByText("PR number");
+      expect(screen.getByPlaceholderText("42")).toHaveValue(null);
+
+      await userEvent.click(screen.getByText("← Pick from open pull requests instead"));
+      await screen.findByText("Add wallet withdraw endpoint");
     });
   });
 

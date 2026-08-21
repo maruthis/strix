@@ -139,6 +139,10 @@ class PentestSchedule(TimestampMixin, Base):
     scan_mode: Mapped[str] = mapped_column(String, default="deep")
     cron_expr: Mapped[str] = mapped_column(String, default="0 0 * * 0")  # weekly default
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Set on create/re-enable and after every fire by app/scheduler.py; a
+    # schedule with next_run_at in the past and enabled=True is due.
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Pentest(TimestampMixin, Base):
@@ -171,6 +175,11 @@ class Pentest(TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     severity_counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Free-text instruction to fold into the scan's root task (e.g. from a
+    # Chat-triggered scan) — passed through to strix as scan_config's
+    # "user_instructions" (see strix/core/inputs.py's build_root_task).
+    # None/empty for a normal New Pentest, which has no such input.
+    custom_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # --------------------------------------------------------------------------
@@ -203,6 +212,9 @@ class Issue(TimestampMixin, Base):
     target: Mapped[str] = mapped_column(String, default="")
     endpoint: Mapped[str] = mapped_column(String, default="")
     fix_effort: Mapped[str] = mapped_column(String, default="medium")  # low|medium|high
+    # "baseline_scan" for a Tier 3 deterministic finding (trivy/gitleaks/kube-linter,
+    # filed before the agent loop starts), None/"agent_validated" for everything else.
+    source: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
@@ -220,9 +232,20 @@ class PRReview(TimestampMixin, Base):
     pr_number: Mapped[int] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String, default="")
     author: Mapped[str] = mapped_column(String, default="")
-    status: Mapped[str] = mapped_column(String, default="awaiting_merge")
-    # awaiting_merge | needs_attention | merged_with_open_findings | passed
+    status: Mapped[str] = mapped_column(String, default="running")
+    # running | awaiting_merge | needs_attention | merged_with_open_findings | passed | failed
     findings_count: Mapped[int] = mapped_column(Integer, default=0)
+    # The PR/MR's base branch, used to diff-scope the real scan against
+    # (falls back to the repository's default_branch when not known — e.g.
+    # a manually-triggered review with no live PR picker data).
+    target_branch: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The exact commit that was actually scanned (the PR ref's resolved
+    # HEAD at clone time) — same reproducibility rationale as
+    # Pentest.resolved_commit_sha.
+    resolved_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Short machine-readable reason when status == "failed" (e.g. a clone
+    # or engine failure) — surfaced in the UI instead of a silent stall.
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 

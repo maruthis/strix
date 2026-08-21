@@ -94,6 +94,42 @@ def test_list_repos_github_maps_fields(monkeypatch):
     ]
 
 
+def test_list_repos_github_follows_link_header_pagination(monkeypatch):
+    """A token with more than one page of accessible repos used to be
+    silently truncated to whatever page 1 returned — the reported bug this
+    covers: a real repo simply never showing up in the Add Repository
+    picker because it lived on page 2+."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        calls.append(url)
+        if "page=2" not in url:
+            return httpx.Response(
+                200,
+                json=[{"full_name": "acme/page-one-repo", "default_branch": "main", "private": False}],
+                headers={"Link": '<https://api.github.com/user/repos?per_page=100&page=2>; rel="next"'},
+            )
+        return httpx.Response(
+            200,
+            json=[{"full_name": "acme/page-two-repo", "default_branch": "main", "private": False}],
+        )
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    repos = git_hosting.list_repos_github(token="t", base_url=None)
+    assert [r["full_name"] for r in repos] == ["acme/page-one-repo", "acme/page-two-repo"]
+    assert len(calls) == 2
+
+
+def test_list_repos_github_stops_when_there_is_no_next_link(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"full_name": "acme/only-repo", "default_branch": "main", "private": False}])
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    repos = git_hosting.list_repos_github(token="t", base_url=None)
+    assert len(repos) == 1
+
+
 def test_verify_gitlab_uses_private_token_header_and_username_field(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url == "https://gitlab.com/api/v4/user"
@@ -132,6 +168,68 @@ def test_list_repos_gitlab_maps_fields(monkeypatch):
         {"full_name": "acme/public-thing", "default_branch": "main", "private": False},
         {"full_name": "acme/no-branch", "default_branch": "main", "private": True},
     ]
+
+
+def test_list_repos_gitlab_follows_x_next_page_pagination(monkeypatch):
+    """Same bug as GitHub's, on GitLab's own pagination scheme: an
+    enterprise GitLab instance with more than 100 accessible projects
+    (e.g. via group/subgroup membership) was silently missing everything
+    past page 1 — including a project like
+    awgment-enterprise-modules/awgment-esb sitting on a later page."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        calls.append(url)
+        if "page=2" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "path_with_namespace": "awgment-enterprise-modules/awgment-esb",
+                        "default_branch": "main",
+                        "visibility": "private",
+                    }
+                ],
+                headers={"X-Next-Page": ""},
+            )
+        return httpx.Response(
+            200,
+            json=[{"path_with_namespace": "acme/widgets", "default_branch": "main", "visibility": "private"}],
+            headers={"X-Next-Page": "2"},
+        )
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    repos = git_hosting.list_repos_gitlab(token="t", base_url=None)
+    assert [r["full_name"] for r in repos] == ["acme/widgets", "awgment-enterprise-modules/awgment-esb"]
+    assert len(calls) == 2
+
+
+def test_list_repos_gitlab_stops_when_x_next_page_is_absent(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json=[{"path_with_namespace": "acme/only-repo", "default_branch": "main", "visibility": "private"}]
+        )
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    repos = git_hosting.list_repos_gitlab(token="t", base_url=None)
+    assert len(repos) == 1
+
+
+def test_list_repos_gitlab_pagination_is_capped_against_a_runaway_loop(monkeypatch):
+    """A provider that (buggily, or via a malicious proxy) always claims
+    there's a next page must not hang the request forever."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[{"path_with_namespace": "acme/x", "default_branch": "main", "visibility": "private"}],
+            headers={"X-Next-Page": "999"},  # always "more pages"
+        )
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    repos = git_hosting.list_repos_gitlab(token="t", base_url=None)
+    assert len(repos) == git_hosting._MAX_PAGES
 
 
 def test_list_repos_gitlab_raises_invalid_credentials_on_401(monkeypatch):
@@ -183,6 +281,88 @@ def test_list_commits_github_maps_fields_and_takes_first_message_line(monkeypatc
     monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
     commits = git_hosting.list_commits_github(token="t", base_url=None, full_name="octocat/widgets")
     assert commits == [{"sha": "ddd444", "message": "Fix the bug", "author_date": "2026-01-01T00:00:00Z"}]
+
+
+def test_list_pull_requests_github_maps_fields(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.github.com/repos/octocat/widgets/pulls?state=open&per_page=100"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "number": 42,
+                    "title": "Add wallet withdraw endpoint",
+                    "user": {"login": "octocat"},
+                    "head": {"ref": "feature/withdraw"},
+                    "base": {"ref": "main"},
+                    "html_url": "https://github.com/octocat/widgets/pull/42",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    prs = git_hosting.list_pull_requests_github(token="t", base_url=None, full_name="octocat/widgets")
+    assert prs == [
+        {
+            "number": 42,
+            "title": "Add wallet withdraw endpoint",
+            "author": "octocat",
+            "source_branch": "feature/withdraw",
+            "target_branch": "main",
+            "url": "https://github.com/octocat/widgets/pull/42",
+        }
+    ]
+
+
+def test_list_pull_requests_github_defaults_a_missing_author_to_unknown(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[{"number": 1, "title": "No user field", "user": None, "head": {}, "base": {}, "html_url": None}],
+        )
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    prs = git_hosting.list_pull_requests_github(token="t", base_url=None, full_name="octocat/widgets")
+    assert prs[0]["author"] == "unknown"
+
+
+def test_list_pull_requests_gitlab_maps_fields_using_the_project_scoped_iid(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://gitlab.com/api/v4/projects/acme%2Fwidgets/merge_requests?state=opened&per_page=100"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "iid": 7,
+                    "id": 999999,  # global id — must NOT be used as "number"
+                    "title": "Fix CORS misconfiguration",
+                    "author": {"username": "laplacian"},
+                    "source_branch": "fix/cors",
+                    "target_branch": "main",
+                    "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/7",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    mrs = git_hosting.list_pull_requests_gitlab(token="t", base_url=None, full_name="acme/widgets")
+    assert mrs == [
+        {
+            "number": 7,
+            "title": "Fix CORS misconfiguration",
+            "author": "laplacian",
+            "source_branch": "fix/cors",
+            "target_branch": "main",
+            "url": "https://gitlab.com/acme/widgets/-/merge_requests/7",
+        }
+    ]
+
+
+def test_list_pull_requests_github_raises_invalid_credentials_on_401(monkeypatch):
+    monkeypatch.setattr(git_hosting, "_client", _client_with(lambda r: httpx.Response(401, json={})))
+    with pytest.raises(git_hosting.CredentialError) as exc_info:
+        git_hosting.list_pull_requests_github(token="bad", base_url=None, full_name="octocat/widgets")
+    assert exc_info.value.code == "invalid_credentials"
 
 
 def test_list_branches_gitlab_url_encodes_the_project_path(monkeypatch):

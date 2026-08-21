@@ -39,7 +39,12 @@ import json
 import logging
 import os
 import random
+import shutil
+import subprocess
+import tempfile
 import uuid
+from pathlib import Path
+
 from . import crypto, models
 from .audit import record_audit
 from .db import SessionLocal
@@ -53,14 +58,27 @@ logger = logging.getLogger("saas.jobs")
 # must be bound to the event loop of the lifespan that owns it. Rebuilding
 # it per-lifespan keeps repeated app startup/shutdown cycles in the same
 # process safe (e.g. multiple TestClient instances in a test session).
-_queue: asyncio.Queue[str] | None = None
+#
+# One shared queue/worker for both pentests and PR reviews (a
+# (job_type, entity_id) tuple, dispatched in _worker_loop) rather than a
+# second queue: _run_real_scan's per-org LLM env-var override is only safe
+# because exactly one scan runs at a time in this process (see its
+# docstring) — a separate PR-review worker would let a pentest and a PR
+# review race on that same global state.
+_queue: asyncio.Queue[tuple[str, str]] | None = None
 _worker_task: asyncio.Task | None = None
 
 
 async def enqueue_pentest(pentest_id: str) -> None:
     if _queue is None:
         raise RuntimeError("job queue not started — call jobs.start_worker() from the app lifespan first")
-    await _queue.put(pentest_id)
+    await _queue.put(("pentest", pentest_id))
+
+
+async def enqueue_pr_review(review_id: str) -> None:
+    if _queue is None:
+        raise RuntimeError("job queue not started — call jobs.start_worker() from the app lifespan first")
+    await _queue.put(("pr_review", review_id))
 
 
 async def start_worker() -> None:
@@ -80,11 +98,14 @@ async def stop_worker() -> None:
 
 async def _worker_loop() -> None:
     while True:
-        pentest_id = await _queue.get()
+        job_type, entity_id = await _queue.get()
         try:
-            await _run_pentest(pentest_id)
+            if job_type == "pentest":
+                await _run_pentest(entity_id)
+            else:
+                await _run_pr_review_job(entity_id)
         except Exception:  # noqa: BLE001 - a broken job must not kill the worker
-            logger.exception("pentest job %s failed", pentest_id)
+            logger.exception("%s job %s failed", job_type, entity_id)
         finally:
             _queue.task_done()
 
@@ -135,6 +156,7 @@ async def _run_pentest(pentest_id: str) -> None:
                         target=finding["target"],
                         endpoint=finding["endpoint"],
                         fix_effort=finding["fix_effort"],
+                        source=finding.get("source"),
                     )
                 )
 
@@ -294,6 +316,9 @@ def _translate_real_finding(raw: dict) -> dict:
         "target": raw.get("target") or "",
         "endpoint": raw.get("endpoint") or "",
         "fix_effort": raw.get("fix_effort") or "medium",
+        # "baseline_scan" for a Tier 3 deterministic finding (see
+        # strix/scan/baseline.py); absent/None for everything an agent filed.
+        "source": raw.get("source"),
     }
 
 
@@ -341,6 +366,7 @@ async def _run_real_scan(db, pentest: models.Pentest, llm_settings: models.OrgLl
             "targets": targets,
             "run_name": pentest.id,
             "scan_mode": pentest.scan_mode,
+            "user_instructions": pentest.custom_instructions or "",
         }
         await run_strix_scan(
             scan_config=scan_config,
@@ -364,6 +390,239 @@ async def _run_real_scan(db, pentest: models.Pentest, llm_settings: models.OrgLl
                 else:
                     os.environ[key] = value
             strix_config_loader._cached = None
+
+
+# --------------------------------------------------------------------------
+# PR reviews — real scan only, diff-scoped against the PR's base branch.
+# --------------------------------------------------------------------------
+
+
+def _pr_ref_spec(provider: str, pr_number: int) -> str:
+    """The provider's synthetic ref for a PR/MR's head commit. Fetching
+    this (rather than checking out the PR's plain source-branch name)
+    resolves correctly even when the PR is from a fork, where the source
+    branch doesn't exist in the base repository's clone at all."""
+    if provider == "gitlab":
+        return f"refs/merge-requests/{pr_number}/head"
+    return f"refs/pull/{pr_number}/head"
+
+
+def _clone_and_checkout_pr(clone_url: str, run_name: str, provider: str, pr_number: int) -> tuple[str, str]:
+    """Clones `clone_url` (full history — diff-scope requires it, same as
+    a shallow `--depth 1` clone would break strix's merge-base computation)
+    and checks out the PR/MR's head commit. Returns `(clone_path,
+    resolved_head_sha)`. Blocking (shells out to git); call via
+    `asyncio.to_thread`, matching `strix.interface.utils.clone_repository`'s
+    own off-event-loop convention.
+    """
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        raise FileNotFoundError("Git executable not found in PATH")
+
+    temp_dir = Path(tempfile.gettempdir()) / "strix_pr_reviews" / run_name
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    clone_path = temp_dir / "repo"
+    if clone_path.exists():
+        shutil.rmtree(clone_path)
+
+    def _run(args: list[str], error_message: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(args, capture_output=True, text=True, check=True)  # noqa: S603
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"{error_message}: {e.stderr or e}") from e
+
+    _run([git_executable, "clone", clone_url, str(clone_path)], f"Could not clone repository {clone_url}")
+    ref_spec = _pr_ref_spec(provider, pr_number)
+    _run(
+        [git_executable, "-C", str(clone_path), "fetch", "origin", f"{ref_spec}:pr-ref"],
+        f"Could not fetch PR #{pr_number} ({ref_spec}) from {clone_url}",
+    )
+    _run([git_executable, "-C", str(clone_path), "checkout", "pr-ref"], f"Could not check out PR #{pr_number}")
+    resolved = _run([git_executable, "-C", str(clone_path), "rev-parse", "HEAD"], "Could not resolve PR HEAD")
+    return str(clone_path.resolve()), resolved.stdout.strip()
+
+
+def _pr_review_blocking_severities(db, org_id: str) -> tuple[list[str], bool]:
+    """(blocking_severities, block_prs_on_findings) for `org_id`, read
+    fresh at scan-completion time rather than captured at trigger time —
+    settings can change while a review is queued/running. Defaults match
+    PRReviewSettings' own column defaults for an org that has never opened
+    PR Review Settings (so no row exists yet)."""
+    row = db.get(models.PRReviewSettings, org_id)
+    if row is None:
+        return (["critical", "high"], True)
+    return (row.blocking_severities, row.block_prs_on_findings)
+
+
+async def _run_real_pr_review_scan(
+    db, review: models.PRReview, repo: models.Repository, llm_settings: models.OrgLlmSettings | None
+) -> list[dict]:
+    """Invokes the upstream strix engine, scoped to only the PR's changed
+    files (`strix.interface.utils.resolve_diff_scope_context`, the same
+    diff-scope mechanism the strix CLI uses in CI) diffed against the PR's
+    base branch. See `_run_real_scan`'s docstring for the per-org LLM env
+    override mechanics this mirrors — same safety caveat applies (single
+    scan at a time in this process).
+    """
+    from strix.config import load_settings
+    from strix.config import loader as strix_config_loader
+    from strix.core.paths import run_dir_for
+    from strix.core.runner import run_strix_scan  # lazy import: optional dependency
+    from strix.interface.utils import resolve_diff_scope_context
+
+    override_active = bool(llm_settings and llm_settings.model)
+    previous_env = {k: os.environ.get(k) for k in _LLM_ENV_KEYS} if override_active else None
+
+    if override_active:
+        os.environ["STRIX_LLM"] = llm_settings.model
+        if llm_settings.api_key:
+            os.environ["LLM_API_KEY"] = llm_settings.api_key
+        if llm_settings.api_base:
+            os.environ["LLM_API_BASE"] = llm_settings.api_base
+        elif "LLM_API_BASE" in os.environ:
+            del os.environ["LLM_API_BASE"]
+        strix_config_loader._cached = None
+
+    try:
+        clone_url = _repo_clone_url(db, review.org_id, repo)
+        cloned_path, resolved_sha = await asyncio.to_thread(
+            _clone_and_checkout_pr, clone_url, review.id, repo.provider, review.pr_number
+        )
+        review.resolved_head_sha = resolved_sha
+        db.commit()
+
+        workspace_subdir = repo.full_name.split("/")[-1]
+        local_sources = [{"source_path": cloned_path, "workspace_subdir": workspace_subdir, "protect_metadata": False}]
+        target_branch = review.target_branch or repo.default_branch
+
+        diff_scope = await asyncio.to_thread(
+            resolve_diff_scope_context, local_sources, "diff", f"origin/{target_branch}", True
+        )
+
+        scan_config = {
+            "scan_id": review.id,
+            "targets": [
+                {
+                    "type": "repository",
+                    "details": {
+                        "target_repo": repo.full_name,
+                        "cloned_repo_path": cloned_path,
+                        "workspace_subdir": workspace_subdir,
+                    },
+                }
+            ],
+            "run_name": review.id,
+            # "quick" over "deep": diff-scope already narrows the surface to
+            # the PR's changed files, and PR checks need fast turnaround.
+            "scan_mode": "quick",
+            "diff_scope": diff_scope.metadata,
+        }
+        await run_strix_scan(
+            scan_config=scan_config,
+            scan_id=review.id,
+            image=load_settings().runtime.image,
+            local_sources=local_sources,
+        )
+
+        vulnerabilities_path = run_dir_for(review.id) / "vulnerabilities.json"
+        if not vulnerabilities_path.exists():
+            return []
+        raw_findings = json.loads(vulnerabilities_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_findings, list):
+            return []
+        return [_translate_real_finding(f) for f in raw_findings if isinstance(f, dict)]
+    finally:
+        if override_active and previous_env is not None:
+            for key, value in previous_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            strix_config_loader._cached = None
+
+
+async def _run_pr_review_job(review_id: str) -> None:
+    """The PR-review counterpart of `_run_pentest`: runs the real scan,
+    files findings as Issues, and finalizes `status`. No mock fallback —
+    a scan failure lands the review in `status="failed"` with `error` set,
+    rather than silently substituting canned findings, so a real problem
+    (bad credentials, unreachable repo, engine crash) is visible instead of
+    masked as a legitimate "no issues found" result."""
+    db = SessionLocal()
+    try:
+        review = db.get(models.PRReview, review_id)
+        if review is None:
+            return
+        repo = db.get(models.Repository, review.repository_id)
+        if repo is None:
+            review.status = "failed"
+            review.error = "repository_not_found"
+            db.commit()
+            return
+
+        llm_settings = db.get(models.OrgLlmSettings, review.org_id)
+
+        try:
+            findings = await _run_real_pr_review_scan(db, review, repo, llm_settings)
+        except Exception:  # noqa: BLE001 - a broken PR review must not kill the worker
+            logger.exception("real scan failed for PR review %s", review.id)
+            db.rollback()
+            review.status = "failed"
+            review.error = "scan_failed"
+            db.commit()
+            record_audit(db, review.org_id, None, "pr_review.failed", f"{repo.full_name}#{review.pr_number}")
+            return
+
+        for finding in findings:
+            db.add(
+                models.Issue(
+                    org_id=review.org_id,
+                    pr_review_id=review.id,
+                    repository_id=repo.id,
+                    title=finding["title"],
+                    description=finding["description"],
+                    severity=finding["severity"],
+                    cvss=finding["cvss"],
+                    cvss_breakdown=finding["cvss_breakdown"],
+                    technical_analysis=finding["technical_analysis"],
+                    remediation_steps=finding["remediation_steps"],
+                    poc_description=finding["poc_description"],
+                    target=repo.full_name,
+                    endpoint=finding["endpoint"],
+                    fix_effort=finding["fix_effort"],
+                    source=finding.get("source"),
+                )
+            )
+        review.findings_count = len(findings)
+
+        blocking_severities, block_prs_on_findings = _pr_review_blocking_severities(db, review.org_id)
+        blocking = any(f["severity"] in blocking_severities for f in findings)
+        if not findings:
+            review.status = "passed"
+        elif block_prs_on_findings and blocking:
+            review.status = "needs_attention"
+        else:
+            review.status = "awaiting_merge"
+        db.commit()
+
+        from .providers import get_github_provider
+
+        provider = get_github_provider()
+        conclusion = "failure" if review.status == "needs_attention" else "success"
+        provider.create_check_run(
+            full_name=repo.full_name, pr_number=review.pr_number, conclusion=conclusion, summary=f"{review.findings_count} finding(s)"
+        )
+
+        record_audit(
+            db,
+            review.org_id,
+            None,
+            "pr_review.completed",
+            f"{repo.full_name}#{review.pr_number}",
+            {"status": review.status, "findings_count": review.findings_count},
+        )
+    finally:
+        db.close()
 
 
 MOCK_FINDINGS = [

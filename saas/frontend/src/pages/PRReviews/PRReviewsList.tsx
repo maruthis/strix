@@ -1,8 +1,9 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitPullRequest, Github, Plus, Settings as SettingsIcon, X } from "lucide-react";
+import { Download, Eye, GitPullRequest, Github, Plus, Settings as SettingsIcon, X } from "lucide-react";
 import { api } from "../../api/client";
-import type { PRReview, PRReviewsResponse, PRReviewSettings, PRReviewStatus, Repository, Severity } from "../../api/types";
+import type { PRReview, PRReviewsResponse, PRReviewSettings, PRReviewStatus, Repository, RepoPullRequest, Severity } from "../../api/types";
 import { EmptyState } from "../../components/shared/EmptyState";
 import { Modal } from "../../components/shared/Modal";
 import { AddRepositoryModal } from "../../components/shared/AddRepositoryModal";
@@ -24,10 +25,12 @@ const TABS = [
 ];
 
 const BOARD_COLUMNS: { key: PRReviewStatus; label: string }[] = [
+  { key: "running", label: "Running" },
   { key: "awaiting_merge", label: "Awaiting Merge" },
   { key: "needs_attention", label: "Needs Attention" },
   { key: "merged_with_open_findings", label: "Merged with Open Findings" },
   { key: "passed", label: "Passed" },
+  { key: "failed", label: "Failed" },
 ];
 
 export default function PRReviewsList() {
@@ -48,6 +51,9 @@ export default function PRReviewsList() {
       api.get<PRReviewsResponse>(
         `/api/pr-reviews?${effectiveStatus !== "all" ? `status_filter=${effectiveStatus}&` : ""}${debouncedSearch ? `search=${encodeURIComponent(debouncedSearch)}` : ""}`
       ),
+    // A triggered review runs a real scan and starts out "running" — poll
+    // so its row updates to a final status without a manual refresh.
+    refetchInterval: 4000,
   });
 
   return (
@@ -101,32 +107,65 @@ export default function PRReviewsList() {
   );
 }
 
-function PRReviewRow({ review: r }: { review: PRReview }) {
+// Statuses that mean the scan has actually finished — a report only exists
+// once one of these is reached (mirrors app/routers/pr_reviews.py's
+// _DONE_STATUSES).
+const DONE_STATUSES = new Set(["awaiting_merge", "needs_attention", "merged_with_open_findings", "passed"]);
+
+function ReportLinks({ reviewId }: { reviewId: string }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-4">
+    <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+      <a href={`/api/pr-reviews/${reviewId}/report`} target="_blank" rel="noreferrer" title="View report" className="text-[#888] hover:text-white">
+        <Eye size={16} />
+      </a>
+      <a href={`/api/pr-reviews/${reviewId}/report/download`} title="Download report (PDF)" className="text-[#888] hover:text-white">
+        <Download size={16} />
+      </a>
+    </div>
+  );
+}
+
+function PRReviewRow({ review: r }: { review: PRReview }) {
+  const navigate = useNavigate();
+  return (
+    <div
+      onClick={() => navigate(`/pr-reviews/${r.id}`)}
+      className="flex cursor-pointer items-center justify-between rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-4 hover:border-[#333]"
+    >
       <div>
         <div className="text-sm text-white">
           {r.repository_full_name} <span className="text-[#666]">#{r.pr_number}</span> — {r.title}
         </div>
         <div className="mt-1 text-xs text-[#666]">
-          by {r.author} · {timeAgo(r.updated_at)} · {r.findings_count} finding(s)
+          by {r.author} · {timeAgo(r.updated_at)} · {r.status === "running" ? "scanning…" : `${r.findings_count} finding(s)`}
         </div>
+        {r.status === "failed" && r.error && <div className="mt-1 text-xs text-red-400">{r.error}</div>}
       </div>
-      <StatusPill value={r.status} />
+      <div className="flex items-center gap-3">
+        {DONE_STATUSES.has(r.status) && <ReportLinks reviewId={r.id} />}
+        <StatusPill value={r.status} />
+      </div>
     </div>
   );
 }
 
 function PRReviewCard({ review: r }: { review: PRReview }) {
+  const navigate = useNavigate();
   return (
-    <div className="rounded-lg border border-[#222] bg-[rgba(255,255,255,0.02)] p-3">
+    <div
+      onClick={() => navigate(`/pr-reviews/${r.id}`)}
+      className="cursor-pointer rounded-lg border border-[#222] bg-[rgba(255,255,255,0.02)] p-3 hover:border-[#333]"
+    >
       <div className="mb-1 text-sm text-white">
         {r.repository_full_name} <span className="text-[#666]">#{r.pr_number}</span>
       </div>
       <div className="mb-2 text-xs text-[#888]">{r.title}</div>
       <div className="flex items-center justify-between text-[10px] text-[#666]">
         <span>{r.author}</span>
-        <span>{r.findings_count} finding(s)</span>
+        <div className="flex items-center gap-2">
+          {DONE_STATUSES.has(r.status) && <ReportLinks reviewId={r.id} />}
+          <span>{r.status === "running" ? "scanning…" : `${r.findings_count} finding(s)`}</span>
+        </div>
       </div>
     </div>
   );
@@ -295,23 +334,50 @@ function TriggerReviewModal({ open, onClose }: { open: boolean; onClose: () => v
   const { data: repos } = useQuery({ queryKey: ["repositories"], queryFn: () => api.get<Repository[]>("/api/repositories"), enabled: open });
   const [repoSearch, setRepoSearch] = useState("");
   const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
+  const [manualEntry, setManualEntry] = useState(false);
   const [prNumber, setPrNumber] = useState("");
   const [title, setTitle] = useState("");
+  const [author, setAuthor] = useState("");
+  const [targetBranch, setTargetBranch] = useState("");
+
+  const { data: pullRequests, isFetching: prsLoading } = useQuery({
+    queryKey: ["repository-pull-requests", selectedRepo?.id],
+    queryFn: () => api.get<RepoPullRequest[]>(`/api/repositories/${selectedRepo!.id}/pull-requests`),
+    enabled: !!selectedRepo,
+  });
 
   function reset() {
     setRepoSearch("");
     setSelectedRepo(null);
+    setManualEntry(false);
     setPrNumber("");
     setTitle("");
+    setAuthor("");
+    setTargetBranch("");
+  }
+
+  function selectPullRequest(pr: RepoPullRequest) {
+    setPrNumber(String(pr.number));
+    setTitle(pr.title);
+    setAuthor(pr.author);
+    setTargetBranch(pr.target_branch ?? "");
+    setManualEntry(true);
   }
 
   const trigger = useMutation({
-    mutationFn: () => api.post<PRReview>("/api/pr-reviews", { repository_id: selectedRepo!.id, pr_number: Number(prNumber), title }),
-    onSuccess: (review) => {
+    mutationFn: () =>
+      api.post<PRReview>("/api/pr-reviews", {
+        repository_id: selectedRepo!.id,
+        pr_number: Number(prNumber),
+        title,
+        ...(author ? { author } : {}),
+        ...(targetBranch ? { target_branch: targetBranch } : {}),
+      }),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pr-reviews"] });
       onClose();
       reset();
-      toast.success(`Review ${review.status === "passed" ? "passed" : `found ${review.findings_count} finding(s)`}`);
+      toast.success("Review queued — running a real scan now");
     },
   });
 
@@ -353,6 +419,56 @@ function TriggerReviewModal({ open, onClose }: { open: boolean; onClose: () => v
     );
   }
 
+  // A live, credentialed GitHub/GitLab integration found open PRs/MRs — let
+  // the user pick one instead of typing the number and title by hand.
+  if (!manualEntry && (prsLoading || (pullRequests && pullRequests.length > 0))) {
+    return (
+      <Modal
+        open={open}
+        onClose={() => {
+          onClose();
+          reset();
+        }}
+        title="Review a pull request"
+        description="Choose an open pull request, or enter its number and title manually."
+      >
+        <div className="mb-3 flex w-full items-center gap-2 rounded-lg border border-[#222] px-3 py-2 text-left text-sm text-white">
+          <Github size={15} className="text-[#888]" />
+          {selectedRepo.full_name}
+          <button type="button" onClick={() => setSelectedRepo(null)} className="ml-auto text-xs text-[#666] hover:text-white">
+            Change
+          </button>
+        </div>
+        {prsLoading && <p className="py-6 text-center text-sm text-[#666]">Loading open pull requests…</p>}
+        {!prsLoading && (
+          <div className="max-h-72 space-y-1.5 overflow-y-auto">
+            {(pullRequests ?? []).map((pr) => (
+              <button
+                key={pr.number}
+                type="button"
+                onClick={() => selectPullRequest(pr)}
+                className="flex w-full items-start gap-2 rounded-lg border border-[#222] px-3 py-2.5 text-left hover:bg-[rgba(255,255,255,0.04)]"
+              >
+                <GitPullRequest size={15} className="mt-0.5 shrink-0 text-[#888]" />
+                <div className="min-w-0">
+                  <div className="truncate text-sm text-white">
+                    <span className="text-[#666]">#{pr.number}</span> {pr.title}
+                  </div>
+                  <div className="mt-0.5 text-xs text-[#666]">by {pr.author}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+        {!prsLoading && (
+          <button type="button" onClick={() => setManualEntry(true)} className="mt-3 text-xs text-[#888] hover:text-white">
+            Can't find it? Enter the PR number manually
+          </button>
+        )}
+      </Modal>
+    );
+  }
+
   return (
     <Modal
       open={open}
@@ -379,6 +495,11 @@ function TriggerReviewModal({ open, onClose }: { open: boolean; onClose: () => v
             <span className="ml-auto text-xs text-[#666]">Change</span>
           </button>
         </Field>
+        {!!pullRequests?.length && (
+          <button type="button" onClick={() => setManualEntry(false)} className="mb-4 -mt-2 text-xs text-[#888] hover:text-white">
+            ← Pick from open pull requests instead
+          </button>
+        )}
         <Field label="PR number">
           <TextInput type="number" required value={prNumber} onChange={(e) => setPrNumber(e.target.value)} placeholder="42" />
         </Field>

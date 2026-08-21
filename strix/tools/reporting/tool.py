@@ -1336,6 +1336,8 @@ _REPORT_SUMMARY_FIELDS = (
     "fix_effort",
     "agent_name",
     "timestamp",
+    "source",
+    "coverage_category",
 )
 
 

@@ -99,6 +99,36 @@ def _raw_input_schema(tool: CustomTool) -> dict[str, Any]:
     }
 
 
+_BEGIN_PATCH_MARKER = "*** Begin Patch"
+_END_PATCH_MARKER = "*** End Patch"
+_CODE_FENCE_RE = re.compile(r"^```[a-zA-Z0-9_-]*\n(.*?)\n```$", re.DOTALL)
+
+
+def _normalize_apply_patch_input(text: str) -> str:
+    """Best-effort recovery from common model formatting mistakes around
+    apply_patch's strict grammar. The SDK's parser (apply_patch_tool.py's
+    ``_parse_apply_patch_input``) requires the raw text to start with
+    ``*** Begin Patch`` and end with ``*** End Patch`` with nothing else
+    around it — a model wrapping the patch in a markdown code fence, or
+    prefixing it with a sentence of commentary, fails that exact-match
+    check even though the patch itself is well-formed. Strip a wrapping
+    fence and any text outside the ``*** Begin/End Patch`` envelope; never
+    touch content between the markers, and leave the input untouched (so
+    it still fails with the SDK's own clear error) if the markers aren't
+    both present.
+    """
+    stripped = text.strip()
+    fence_match = _CODE_FENCE_RE.match(stripped)
+    if fence_match:
+        stripped = fence_match.group(1).strip()
+
+    start = stripped.find(_BEGIN_PATCH_MARKER)
+    end = stripped.rfind(_END_PATCH_MARKER)
+    if start != -1 and end != -1 and end >= start:
+        stripped = stripped[start : end + len(_END_PATCH_MARKER)]
+    return stripped
+
+
 def _extract_custom_input(tool: CustomTool, raw_input: str | dict[str, Any]) -> str:
     if isinstance(raw_input, str):
         try:
@@ -241,6 +271,8 @@ def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
         custom_input = _extract_custom_input(tool, raw_input)
         if not custom_input:
             return f"`{_custom_tool_input_field(tool)}` must be a non-empty string."
+        if tool.name == "apply_patch":
+            custom_input = _normalize_apply_patch_input(custom_input)
         try:
             return await _bound_result(await tool.on_invoke_tool(ctx, custom_input))
         except Exception as exc:  # noqa: BLE001 - matches SDK CustomTool error-as-result behavior.

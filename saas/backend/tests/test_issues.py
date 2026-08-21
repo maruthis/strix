@@ -36,6 +36,9 @@ def test_issue_lifecycle(auth_client):
     detail = client.get(f"/api/issues/{issue['id']}")
     assert detail.status_code == 200
     assert detail.json()["title"] == issue["title"]
+    # Mock-scan findings carry no Tier 3 baseline-scan provenance.
+    assert issue["source"] is None
+    assert detail.json()["source"] is None
 
     update = client.patch(f"/api/issues/{issue['id']}/status", json={"status": "fixed"})
     assert update.status_code == 200

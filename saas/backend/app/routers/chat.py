@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..audit import record_audit as _record_audit
 from ..deps import current_org, current_user, db_dep
+from ..settings import settings
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -108,10 +109,11 @@ class NewMessageIn(BaseModel):
 
 
 @router.post("/sessions/{session_id}/messages")
-def send_message(
+async def send_message(
     session_id: str,
     body: NewMessageIn,
     org: models.Organization = Depends(current_org),
+    user: models.User = Depends(current_user),
     db: Session = Depends(db_dep),
 ) -> list[dict]:
     session = db.get(models.ChatSession, session_id)
@@ -126,7 +128,7 @@ def send_message(
     from .knowledge import relevant_entries
 
     context_entries = relevant_entries(db, org.id, repository_id=body.repository_ids[0] if body.repository_ids else None)
-    reply = _mock_agent_reply(body.content, session.category, context_entries)
+    reply = await _run_chat_turn(db, org, user, body, context_entries)
     assistant_msg = models.ChatMessage(session_id=session.id, role="assistant", content=reply)
     db.add(assistant_msg)
 
@@ -137,17 +139,60 @@ def send_message(
     return [_serialize_message(user_msg), _serialize_message(assistant_msg)]
 
 
-def _mock_agent_reply(prompt: str, category: str, context_entries: list[models.KnowledgeEntry]) -> str:
-    """Placeholder assistant reply. Real orchestration should stream this
-    from the upstream strix agent engine (TASKS.md P9-4) — invoked the same
-    way jobs.py invokes it for pentests, but conversationally. Left as a
-    canned response here since that requires Docker/LLM credentials this
-    scaffold doesn't assume are configured."""
-    context_note = ""
-    if context_entries:
-        context_note = f" I'll factor in {len(context_entries)} piece(s) of knowledge base context you've added."
+async def _run_chat_turn(
+    db: Session,
+    org: models.Organization,
+    user: models.User,
+    body: NewMessageIn,
+    context_entries: list[models.KnowledgeEntry],
+) -> str:
+    """Real reply, never a fabricated one. With no repository attached
+    there's nothing to scan, so say that plainly rather than pretending a
+    review started. With one or more repositories attached and real
+    scanning enabled, this actually triggers a pentest per repository —
+    the exact same `create_and_enqueue_pentest` path "New Pentest" uses,
+    just with the chat message threaded through as the scan's custom
+    instruction (`Pentest.custom_instructions` -> scan_config's
+    `user_instructions`, which strix's `build_root_task` folds into the
+    root task). The reply reports what was actually started, never a
+    fabricated "found N issues" — a real scan takes minutes, so results
+    show up on the Pentests/Issues pages once it finishes, not in this
+    turn."""
+    if not body.repository_ids:
+        return (
+            'I can\'t scan anything without a target. Click "Add repositories" below to attach '
+            "one or more connected repositories, then send your request again."
+        )
+
+    if not settings.enable_real_scan:
+        return (
+            "Real scanning isn't enabled for this deployment (SAAS_ENABLE_REAL_SCAN), so I can't "
+            "run an actual scan here. Ask an admin to enable it, or use New Pentest once it's on."
+        )
+
+    from .pentests import create_and_enqueue_pentest
+
+    repos = []
+    for repo_id in body.repository_ids:
+        repo = db.get(models.Repository, repo_id)
+        if repo and repo.org_id == org.id:
+            repos.append(repo)
+
+    if not repos:
+        return "I couldn't find those repositories in this organization — try attaching them again."
+
+    started: list[tuple[str, str]] = []
+    for repo in repos:
+        pentest = await create_and_enqueue_pentest(
+            db, org, user, "repository", repo.id, scan_mode="quick", custom_instructions=body.content.strip()
+        )
+        started.append((repo.full_name, pentest.id))
+
+    context_note = (
+        f" I'm also factoring in {len(context_entries)} piece(s) of knowledge base context." if context_entries else ""
+    )
+    scan_list = "; ".join(f"{name} (pentest {pid[:8]})" for name, pid in started)
     return (
-        f"Got it — I'll start a {category.replace('_', ' ')} review for: “{prompt}”.{context_note} "
-        "This is a placeholder reply; connect a real scan/LLM backend "
-        "(SAAS_ENABLE_REAL_SCAN=1) to get live agent output here."
+        f"Started a real scan for: {scan_list}.{context_note} This runs in the background — track progress "
+        "and results on the Pentests page once it's done."
     )

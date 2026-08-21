@@ -37,6 +37,7 @@ def _serialize(i: models.Issue) -> dict:
         "target": i.target,
         "endpoint": i.endpoint,
         "fix_effort": i.fix_effort,
+        "source": i.source,
         "created_at": i.created_at.isoformat(),
         "updated_at": i.updated_at.isoformat(),
     }

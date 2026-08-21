@@ -87,4 +87,18 @@ describe("IssueDetail", () => {
     await screen.findByText("SQL injection in search");
     await userEvent.click(screen.getByRole("button", { name: /Back/ }));
   });
+
+  it("shows an Automatically detected badge for a baseline-scan finding", async () => {
+    mockFetchImpl(async () => jsonRes({ ...ISSUE, source: "baseline_scan" }));
+    renderWithProviders(<IssueDetail />, { route: "/issues/i1", path: "/issues/:id" });
+    await screen.findByText("SQL injection in search");
+    expect(screen.getByText("Automatically detected")).toBeInTheDocument();
+  });
+
+  it("omits the badge for an agent-validated finding", async () => {
+    mockFetchImpl(async () => jsonRes({ ...ISSUE, source: null }));
+    renderWithProviders(<IssueDetail />, { route: "/issues/i1", path: "/issues/:id" });
+    await screen.findByText("SQL injection in search");
+    expect(screen.queryByText("Automatically detected")).not.toBeInTheDocument();
+  });
 });

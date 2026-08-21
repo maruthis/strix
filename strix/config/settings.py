@@ -120,6 +120,17 @@ class TelemetrySettings(BaseSettings):
     enabled: bool = Field(default=True, alias="STRIX_TELEMETRY")
 
 
+class BaselineSettings(BaseSettings):
+    """Deterministic, tool-driven pre-agent baseline scanning (dependency
+    CVEs, secrets, IaC/CI misconfiguration) — see
+    docs/scan-coverage-tier3-plan.md."""
+
+    model_config = _BASE_CONFIG
+
+    enabled: bool = Field(default=True, alias="STRIX_BASELINE_SCAN")
+    timeout: int = Field(default=180, gt=0, alias="STRIX_BASELINE_TIMEOUT")
+
+
 class IntegrationSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
@@ -152,5 +163,6 @@ class Settings(BaseSettings):
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     context: ContextSettings = Field(default_factory=ContextSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
+    baseline: BaselineSettings = Field(default_factory=BaselineSettings)
     integrations: IntegrationSettings = Field(default_factory=IntegrationSettings)
     viewer: ViewerSettings = Field(default_factory=ViewerSettings)

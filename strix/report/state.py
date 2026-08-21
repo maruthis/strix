@@ -252,6 +252,8 @@ class ReportState:
         dependency_metadata: dict[str, str] | None = None,
         agent_id: str | None = None,
         agent_name: str | None = None,
+        source: str | None = None,
+        coverage_category: str | None = None,
     ) -> str:
         report_id = f"vuln-{len(self.vulnerability_reports) + 1:04d}"
 
@@ -305,6 +307,10 @@ class ReportState:
             report["agent_id"] = agent_id
         if agent_name:
             report["agent_name"] = agent_name
+        if source:
+            report["source"] = source.strip()
+        if coverage_category:
+            report["coverage_category"] = coverage_category.strip()
 
         self.vulnerability_reports.append(report)
         logger.info(f"Added vulnerability report: {report_id} - {title}")
@@ -319,6 +325,21 @@ class ReportState:
 
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
         return list(self.vulnerability_reports)
+
+    def get_baseline_finding_counts(self) -> dict[str, int]:
+        """Count baseline-scan findings (Tier 3) per coverage category.
+
+        Used by ``finish_scan`` to catch a ``coverage_checklist`` note that
+        contradicts what the deterministic baseline scan actually found.
+        """
+        counts: dict[str, int] = {}
+        for report in self.vulnerability_reports:
+            if report.get("source") != "baseline_scan":
+                continue
+            category = report.get("coverage_category")
+            if category:
+                counts[category] = counts.get(category, 0) + 1
+        return counts
 
     def record_sdk_usage(
         self,

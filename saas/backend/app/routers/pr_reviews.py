@@ -1,21 +1,29 @@
 from __future__ import annotations
 
 import json
-import random
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..audit import record_audit as _record_audit
 from ..deps import current_org, current_user, db_dep, require_admin
-from ..jobs import MOCK_FINDINGS
+from ..jobs import enqueue_pr_review
 from ..providers import get_github_provider
+from ..reports import render_pr_review_report_html, render_report_pdf
+from ..run_logs import read_scan_log
+from ..settings import settings
 
 router = APIRouter(prefix="/api/pr-reviews", tags=["pr-reviews"])
 
 STATUS_TABS = ["all", "awaiting_merge", "needs_attention", "merged_with_open_findings", "passed"]
+# A review's report/log/issues are only meaningful once the scan has
+# actually finished — "running" has nothing to show yet, and "failed" has
+# no findings and no report worth generating (mirrors pentests.py's
+# `_load_pentest_and_issues`, which only allows status == "completed").
+_DONE_STATUSES = {"awaiting_merge", "needs_attention", "merged_with_open_findings", "passed"}
 
 
 def _serialize(p: models.PRReview, repo_names: dict[str, str]) -> dict:
@@ -28,6 +36,9 @@ def _serialize(p: models.PRReview, repo_names: dict[str, str]) -> dict:
         "author": p.author,
         "status": p.status,
         "findings_count": p.findings_count,
+        "target_branch": p.target_branch,
+        "resolved_head_sha": p.resolved_head_sha,
+        "error": p.error,
         "created_at": p.created_at.isoformat(),
         "updated_at": p.updated_at.isoformat(),
     }
@@ -77,65 +88,43 @@ class NewPRReviewIn(BaseModel):
     pr_number: int
     title: str
     author: str = "unknown"
+    # The PR/MR's base branch — sent by the frontend's PR picker when it
+    # has real provider data; None for a fully manual entry, in which case
+    # the scan falls back to the repository's default_branch.
+    target_branch: str | None = None
 
 
-def _run_pr_review(db: Session, org: models.Organization, repo: models.Repository, pr_number: int, title: str, author: str) -> models.PRReview:
-    """Core PR-review execution, shared by the manual trigger endpoint and
-    the GitHub webhook handler below. Runs the mock scanner (same findings
-    pool as jobs.py) and applies blocking-severity settings to derive a
-    status, then reports a check-run back through the GitHub provider."""
-    settings_row = _get_or_create_settings(db, org.id)
-
+async def _create_and_enqueue_pr_review(
+    db: Session,
+    org: models.Organization,
+    repo: models.Repository,
+    pr_number: int,
+    title: str,
+    author: str,
+    target_branch: str | None,
+) -> models.PRReview:
+    """Creates the PRReview row (status="running") and enqueues the real
+    scan on the shared job worker — shared by the manual trigger endpoint
+    and the GitHub webhook handler below. Returns immediately; the caller
+    does not wait for the scan to finish (it can take minutes, same as a
+    pentest — see jobs.py's `_run_pr_review_job`)."""
     review = models.PRReview(
         org_id=org.id,
         repository_id=repo.id,
         pr_number=pr_number,
         title=title,
         author=author,
+        target_branch=target_branch,
     )
     db.add(review)
-    db.flush()
-
-    findings = random.sample(MOCK_FINDINGS, k=random.randint(0, 3))
-    for f in findings:
-        db.add(
-            models.Issue(
-                org_id=org.id,
-                pr_review_id=review.id,
-                repository_id=repo.id,
-                title=f["title"],
-                description=f["description"],
-                severity=f["severity"],
-                cvss=f["cvss"],
-                technical_analysis=f["technical_analysis"],
-                remediation_steps=f["remediation_steps"],
-                poc_description=f["poc_description"],
-                target=repo.full_name,
-                endpoint=f["endpoint"],
-                fix_effort=f["fix_effort"],
-            )
-        )
-    review.findings_count = len(findings)
-
-    blocking = any(f["severity"] in settings_row.blocking_severities for f in findings)
-    if not findings:
-        review.status = "passed"
-    elif settings_row.block_prs_on_findings and blocking:
-        review.status = "needs_attention"
-    else:
-        review.status = "awaiting_merge"
     db.commit()
     db.refresh(review)
-
-    provider = get_github_provider()
-    conclusion = "failure" if review.status == "needs_attention" else "success"
-    provider.create_check_run(full_name=repo.full_name, pr_number=review.pr_number, conclusion=conclusion, summary=f"{review.findings_count} finding(s)")
-
+    await enqueue_pr_review(review.id)
     return review
 
 
 @router.post("")
-def trigger_pr_review(
+async def trigger_pr_review(
     body: NewPRReviewIn,
     org: models.Organization = Depends(current_org),
     user: models.User = Depends(current_user),
@@ -144,8 +133,10 @@ def trigger_pr_review(
     repo = db.get(models.Repository, body.repository_id)
     if not repo or repo.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="repository_not_found")
+    if not settings.enable_real_scan:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="real_scan_not_enabled")
 
-    review = _run_pr_review(db, org, repo, body.pr_number, body.title, body.author)
+    review = await _create_and_enqueue_pr_review(db, org, repo, body.pr_number, body.title, body.author, body.target_branch)
     _record_audit(db, org.id, user.id, "pr_review.triggered", f"{repo.full_name}#{body.pr_number}")
     return _serialize_one(review, db)
 
@@ -213,6 +204,85 @@ def update_settings(
     db.commit()
     _record_audit(db, org.id, user.id, "pr_review_settings.updated", "PR review settings", changed)
     return _serialize_settings(settings_row)
+
+
+# --------------------------------------------------------------------------
+# Single review: detail, findings, run log, report.
+#
+# These use a /{review_id} path param, so they must be registered AFTER
+# every literal-path route above (e.g. /settings) — FastAPI/Starlette
+# matches routes in registration order, and /{review_id} would otherwise
+# swallow a request to /settings by matching review_id="settings".
+# --------------------------------------------------------------------------
+
+
+@router.get("/{review_id}")
+def get_pr_review(review_id: str, org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> dict:
+    review = db.get(models.PRReview, review_id)
+    if not review or review.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    return _serialize_one(review, db)
+
+
+@router.get("/{review_id}/issues")
+def get_pr_review_issues(review_id: str, org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> list[dict]:
+    from .issues import _serialize as serialize_issue
+
+    review = db.get(models.PRReview, review_id)
+    if not review or review.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    issues = db.query(models.Issue).filter_by(pr_review_id=review_id).all()
+    return [serialize_issue(i) for i in issues]
+
+
+@router.get("/{review_id}/logs")
+def get_pr_review_logs(
+    review_id: str,
+    level: str | None = None,
+    agent_id: str | None = None,
+    q: str | None = None,
+    org: models.Organization = Depends(current_org),
+    db: Session = Depends(db_dep),
+) -> dict:
+    review = db.get(models.PRReview, review_id)
+    if not review or review.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    return read_scan_log(review_id, level=level, agent_id=agent_id, q=q)
+
+
+def _load_pr_review_and_issues(
+    review_id: str, org: models.Organization, db: Session
+) -> tuple[models.PRReview, models.Repository, list[models.Issue]]:
+    review = db.get(models.PRReview, review_id)
+    if not review or review.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    if review.status not in _DONE_STATUSES:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="report_not_ready")
+    repo = db.get(models.Repository, review.repository_id)
+    if repo is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="repository_not_found")
+    issues = db.query(models.Issue).filter_by(pr_review_id=review_id).all()
+    return review, repo, issues
+
+
+@router.get("/{review_id}/report", response_class=HTMLResponse)
+def view_pr_review_report(review_id: str, org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> HTMLResponse:
+    review, repo, issues = _load_pr_review_and_issues(review_id, org, db)
+    html = render_pr_review_report_html(review, repo, issues, org)
+    return HTMLResponse(content=html)
+
+
+@router.get("/{review_id}/report/download")
+def download_pr_review_report(review_id: str, org: models.Organization = Depends(current_org), db: Session = Depends(db_dep)) -> Response:
+    review, repo, issues = _load_pr_review_and_issues(review_id, org, db)
+    html = render_pr_review_report_html(review, repo, issues, org)
+    pdf_bytes = render_report_pdf(html)
+    filename = f"pr-review-report-{review.id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # --------------------------------------------------------------------------
@@ -284,5 +354,8 @@ async def github_webhook(request: Request, db: Session = Depends(db_dep)) -> dic
     if author in settings_row.excluded_usernames:
         return {"ok": True, "skipped": "excluded_username"}
 
-    review = _run_pr_review(db, org, repo, pr_number, title, author)
+    if not settings.enable_real_scan:
+        return {"ok": True, "skipped": "real_scan_not_enabled"}
+
+    review = await _create_and_enqueue_pr_review(db, org, repo, pr_number, title, author, base_branch)
     return {"ok": True, "review_id": review.id, "status": review.status}

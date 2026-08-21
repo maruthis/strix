@@ -329,6 +329,10 @@ strix_runs/<run_name>/
 ├── vulnerabilities.csv           # flat severity-sorted index
 ├── vulnerabilities/
 │   └── vuln-0001.md                # one rendered Markdown report per finding
+├── baseline/                           # raw tool output from §5.2's baseline scan
+│   ├── trivy.json                        # (present only for whitebox targets;
+│   ├── gitleaks.json                     #  one file per tool that actually ran —
+│   └── kube-linter.json                  #  a skipped/missing tool writes nothing)
 ├── findings.sarif                    # SARIF 2.1.0 — always emitted, even empty
 ├── penetration_test_report.md          # executive report (root's finish_scan)
 └── .state/
@@ -347,6 +351,64 @@ otherwise let a fresh run reallocate a colliding `vuln-0001` id and
 overwrite a prior finding's Markdown on disk); `respawn_subagents()`
 rebuilds every non-terminal agent from the coordinator snapshot and
 reopens its existing `SQLiteSession`, which the SDK replays automatically.
+The baseline scan itself is **not** re-run on resume (`run_strix_scan`
+only invokes it when `not is_resume`) — its findings are already in
+`vulnerabilities.json` from the original run.
+
+### 5.2 Baseline scan (pre-agent, deterministic)
+
+Before the root agent's first turn, `run_strix_scan` (`strix/core/runner.py`)
+runs a harness-driven, tool-based scan against the already-resolved
+`local_sources` — the same host-filesystem paths a whitebox target's
+source tree lives at, before the sandbox even exists. This is not an
+agent tool call; nothing here goes through the LLM. See
+`docs/scan-coverage-tier3-plan.md` for the full design rationale (it
+exists because letting an LLM root agent decide, per run, whether to
+spawn a dependency/secrets/IaC agent produced wildly inconsistent
+coverage — the same commit scanned three times produced three different
+finding sets).
+
+`strix/scan/baseline.py`'s `run_baseline_scan(local_sources, timeout)`
+wraps three tools, one per mechanically-checkable coverage category:
+
+| Category         | Tool          | What it covers                                            |
+|-------------------|---------------|-------------------------------------------------------------|
+| `dependencies`     | `trivy fs`    | Known-CVE package versions across every lockfile in the tree (a monorepo's per-workspace lockfiles are picked up automatically — trivy walks the full tree) |
+| `secrets`          | `gitleaks`    | Credential/key exposure, **including full git history** (`gitleaks detect`), not just the working tree |
+| `infrastructure`   | `kube-linter` | Kubernetes/IaC manifest misconfiguration                    |
+
+Each tool is optional at runtime: a missing binary, a timeout, a crash,
+or unparseable output degrades to zero findings for that category and a
+logged warning (`BaselineResult.skipped_tools`) — a baseline-scan problem
+never aborts or blocks the rest of the scan. Findings are normalized into
+`BaselineFinding`s and filed through the same `ReportState.add_vulnerability_report()`
+every agent-filed finding uses, tagged `source="baseline_scan"` and
+`coverage_category=<dependencies|secrets|infrastructure>` — indistinguishable
+in shape from an agent-filed finding to every downstream consumer
+(SARIF, `vulnerabilities.json`, the saas Issue pipeline), just with two
+extra optional keys for provenance. Raw per-tool output is also persisted
+to `run_dir/baseline/*.json` for audit.
+
+Two integration points close the loop with the agent layer:
+
+- A short summary (`BaselineResult.summary_text()`) is injected into the
+  **root agent's** system prompt only (`extra_system_prompt_context`'s
+  `baseline_scan_summary` key, rendered in `system_prompt.jinja`), so the
+  root agent knows from turn one what's already been found and doesn't
+  waste an agent rediscovering it from scratch.
+- `finish_scan` (`strix/tools/finish/tool.py`) cross-checks the root
+  agent's mandatory `coverage_checklist` notes for `dependencies`,
+  `secrets`, and `infrastructure` against `ReportState.get_baseline_finding_counts()`:
+  if the baseline scan found N findings in one of those categories, the
+  agent's checklist note for that category must cite the exact count, or
+  `finish_scan` rejects the call. This closes a gap the checklist alone
+  couldn't: a plausible-but-false "nothing found" note used to pass
+  Tier 2's length/emptiness check unchallenged.
+
+Controlled by `BaselineSettings` (§6.2): `STRIX_BASELINE_SCAN` (default
+on) and `STRIX_BASELINE_TIMEOUT` (per-tool timeout, default 180s). Runs
+only when there's something to scan (`local_sources` non-empty) and only
+on a fresh run, not a resume.
 
 ## 6. The LLM layer
 
@@ -417,10 +479,12 @@ directly resetting `loader._cached = None`, which is what `saas/`'s
 (model, api_key, api_base, reasoning_effort, timeouts, tool-call caps),
 `DedupeSettings` (a *separate*, independent model/key/base used only for
 vulnerability-dedup LLM calls), `ContextSettings` (compaction/tool-output
-bounding knobs), `RuntimeSettings` (sandbox image/backend), plus
-telemetry/integration/viewer settings. `max_turns`/`max_budget_usd` are
-**not** persisted settings — they're plain CLI-supplied parameters to
-`run_strix_scan(...)` (`DEFAULT_MAX_TURNS = 500`).
+bounding knobs), `RuntimeSettings` (sandbox image/backend),
+`BaselineSettings` (§5.2's pre-agent baseline scan — enable flag and
+per-tool timeout), plus telemetry/integration/viewer settings.
+`max_turns`/`max_budget_usd` are **not** persisted settings — they're
+plain CLI-supplied parameters to `run_strix_scan(...)`
+(`DEFAULT_MAX_TURNS = 500`).
 
 ### 6.3 What every LLM call carries
 
@@ -588,6 +652,12 @@ findings translation back into the SaaS's own `Issue` rows) and §8 for the
 one deliberate, documented exception where `saas/` work required a small
 edit to this engine (`strix/core/inputs.py`'s `make_model_settings`, to
 add `allowed_openai_params` for strict LiteLLM-proxy providers).
+§5.2's baseline-scan `source`/`coverage_category` fields pass straight
+through `_translate_real_finding` in `saas/backend/app/jobs.py` into the
+`Issue.source` column, and the frontend renders an "Automatically
+detected" badge on any Issue with `source == "baseline_scan"` — no other
+saas-side structural change was needed since the finding shape is
+otherwise identical to an agent-filed one.
 
 ## 10. Not fully verified — worth a closer look before relying on
 

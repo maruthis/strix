@@ -35,8 +35,18 @@ REQUIRED_COVERAGE_CATEGORIES: tuple[str, ...] = (
 
 _MIN_COVERAGE_NOTE_LENGTH = 15
 
+# Categories a Tier 3 baseline scan (strix/scan/baseline.py) can answer
+# deterministically. When it found something, the agent's checklist note
+# has to actually reference that — closes the gap where a plausible-sounding
+# but false "nothing found" note would otherwise pass the length/emptiness
+# check above unchallenged.
+_BASELINE_CROSSCHECK_CATEGORIES = ("dependencies", "secrets", "infrastructure")
 
-def _validate_coverage_checklist(coverage_checklist: dict[str, str]) -> list[str]:
+
+def _validate_coverage_checklist(
+    coverage_checklist: dict[str, str],
+    baseline_counts: dict[str, int] | None = None,
+) -> list[str]:
     errors: list[str] = []
     missing = [c for c in REQUIRED_COVERAGE_CATEGORIES if c not in coverage_checklist]
     if missing:
@@ -61,6 +71,19 @@ def _validate_coverage_checklist(coverage_checklist: dict[str, str]) -> list[str
                 f"('{note.strip()}') — state what was checked/found, or the specific "
                 "reason this category doesn't apply to this target. Not a one-word dismissal."
             )
+    for category in _BASELINE_CROSSCHECK_CATEGORIES:
+        count = (baseline_counts or {}).get(category, 0)
+        if count <= 0:
+            continue
+        note = coverage_checklist.get(category, "")
+        if str(count) not in note:
+            errors.append(
+                f"coverage_checklist['{category}'] doesn't account for the {count} "
+                "baseline-scan finding(s) the harness already filed in this category "
+                "(see list_reports with source=baseline_scan) — reference that count "
+                "explicitly and say what was done with each (reviewed/escalated/"
+                "deepened), not a generic note that ignores them."
+            )
     return errors
 
 
@@ -82,6 +105,11 @@ def _do_finish(
             ),
         }
 
+    from strix.report.state import get_global_report_state
+
+    report_state = get_global_report_state()
+    baseline_counts = report_state.get_baseline_finding_counts() if report_state else {}
+
     errors: list[str] = []
     if not executive_summary.strip():
         errors.append("Executive summary cannot be empty")
@@ -91,14 +119,11 @@ def _do_finish(
         errors.append("Technical analysis cannot be empty")
     if not recommendations.strip():
         errors.append("Recommendations cannot be empty")
-    errors.extend(_validate_coverage_checklist(coverage_checklist))
+    errors.extend(_validate_coverage_checklist(coverage_checklist, baseline_counts))
     if errors:
         return {"success": False, "error": "Validation failed", "errors": errors}
 
     try:
-        from strix.report.state import get_global_report_state
-
-        report_state = get_global_report_state()
         if report_state is None:
             logger.warning("No global report state; scan results not persisted")
             return {
@@ -218,6 +243,14 @@ async def finish_scan(
        get a note claiming otherwise — if you haven't covered it yet, go
        spawn an agent for it before calling this tool, don't just write
        something plausible-sounding to get past the gate.
+
+       For ``dependencies``, ``secrets``, and ``infrastructure``: a
+       deterministic baseline scan already ran before you started and may
+       have filed findings — check ``list_reports`` (entries it filed carry
+       ``source: baseline_scan``), or the summary injected into your own
+       context. If it found any in a category, your note for that category
+       MUST cite the exact count — this is checked, and a note that doesn't
+       mention it is rejected regardless of how plausible it reads.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.

@@ -88,13 +88,12 @@ def _no_client() -> str:
     )
 
 
-def _err(name: str, exc: Exception) -> str:
+def _err(name: str, exc: Exception, extra: dict[str, Any] | None = None) -> str:
     logger.exception("%s failed", name)
-    return json.dumps(
-        {"success": False, "error": f"{name} failed: {exc}"},
-        ensure_ascii=False,
-        default=str,
-    )
+    payload: dict[str, Any] = {"success": False, "error": f"{name} failed: {exc}"}
+    if extra:
+        payload.update(extra)
+    return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 @function_tool(timeout=120)
@@ -224,7 +223,23 @@ async def list_requests(
             default=str,
         )
     except Exception as exc:  # noqa: BLE001
-        return _err("list_requests", exc)
+        # Caido's error location (line/column) refers to its own re-serialized
+        # query document, not this httpql_filter string, so it's useless for
+        # debugging as-is. Echo the actual filter that was rejected — and a
+        # quoting reminder — so a bad-syntax call is self-correctable on the
+        # next turn instead of a dead end.
+        extra: dict[str, Any] | None = None
+        if httpql_filter and "Invalid HTTPQL query" in str(exc):
+            extra = {
+                "httpql_filter_sent": httpql_filter,
+                "hint": (
+                    "Check quoting: string values need double quotes "
+                    '(req.method.eq:"POST"), integers must not be quoted '
+                    "(resp.code.eq:200), and there is no NOT operator — use "
+                    "ne/ncont/nlike/nregex instead."
+                ),
+            }
+        return _err("list_requests", exc, extra)
 
 
 @function_tool(timeout=60)

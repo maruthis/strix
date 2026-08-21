@@ -20,7 +20,10 @@ const CATALOG = [
     label: "GitHub",
     coming_soon: false,
     live: true,
-    configure_url: "https://github.com/settings/installations",
+    // github/gitlab are per-org access tokens, not GitHub-App-style
+    // installations — there's no provider-side settings page to link to,
+    // so the backend never sends a configure_url for them.
+    configure_url: null,
     status: "connected",
     account_label: "maruthis",
     base_url: null,
@@ -33,7 +36,7 @@ const CATALOG = [
     label: "GitLab",
     coming_soon: false,
     live: true,
-    configure_url: "https://gitlab.com/-/user_settings/applications",
+    configure_url: null,
     status: "not_connected",
     account_label: null,
     base_url: null,
@@ -66,9 +69,21 @@ describe("IntegrationsList", () => {
     expect(screen.getByText("Disconnect")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Connect" }).length).toBe(5); // gitlab, bitbucket, slack, jira, linear
 
-    // Configure is a real external link, not an in-app action.
+    // No Configure link for a connected github/gitlab: it's a per-org
+    // access token, not an app installation, so there's nothing on the
+    // provider's side to configure.
+    expect(screen.queryByRole("link", { name: /Configure/ })).not.toBeInTheDocument();
+  });
+
+  it("still shows a Configure link for a live provider that does have a configure_url", async () => {
+    mockFetchImpl(async () =>
+      jsonRes([{ ...CATALOG[0], configure_url: "https://example.com/settings/installations" }, ...CATALOG.slice(1)])
+    );
+    renderWithProviders(<IntegrationsList />);
+    await screen.findByText("GitHub");
+
     const configureLink = screen.getByRole("link", { name: /Configure/ });
-    expect(configureLink).toHaveAttribute("href", "https://github.com/settings/installations");
+    expect(configureLink).toHaveAttribute("href", "https://example.com/settings/installations");
     expect(configureLink).toHaveAttribute("target", "_blank");
     expect(configureLink).toHaveAttribute("rel", "noopener noreferrer");
   });

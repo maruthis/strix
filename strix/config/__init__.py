@@ -17,6 +17,7 @@ from strix.config.loader import (
     persist_current,
 )
 from strix.config.settings import (
+    BaselineSettings,
     ContextSettings,
     DedupeSettings,
     IntegrationSettings,
@@ -28,6 +29,7 @@ from strix.config.settings import (
 
 
 __all__ = [
+    "BaselineSettings",
     "ContextSettings",
     "DedupeSettings",
     "IntegrationSettings",

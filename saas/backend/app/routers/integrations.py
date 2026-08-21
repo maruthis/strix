@@ -17,8 +17,12 @@ deployment can create (see CONFIG.md for the same tradeoff already made
 for the GitHub App and Stripe integrations).
 
 `configure_url` in the catalog is a real, provider-owned settings page
-(e.g. GitHub's "Installed GitHub Apps" list) that the frontend opens in a
-new tab from the "Configure" action.
+that the frontend opens in a new tab from the "Configure" action — for a
+GitHub-App-style installation, that's e.g. the "Installed GitHub Apps"
+list. github/gitlab deliberately have no `configure_url`: they're a
+per-org access token, not an app installation, so there's nothing on the
+provider's side to configure once connected (disconnecting/reconnecting
+happens entirely in this UI).
 """
 
 from __future__ import annotations
@@ -35,8 +39,12 @@ from ..audit import record_audit as _record_audit
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
 CATALOG = [
-    {"provider": "github", "category": "code", "label": "GitHub", "configure_url": "https://github.com/settings/installations", "live": True},
-    {"provider": "gitlab", "category": "code", "label": "GitLab", "configure_url": "https://gitlab.com/-/user_settings/applications", "live": True},
+    # No configure_url for github/gitlab: those settings pages are for a
+    # GitHub-App-style installation, which this integration isn't — it's a
+    # per-org personal/project access token (see git_hosting.py's
+    # docstring), so there's nothing on the provider's side to configure.
+    {"provider": "github", "category": "code", "label": "GitHub", "live": True},
+    {"provider": "gitlab", "category": "code", "label": "GitLab", "live": True},
     {"provider": "bitbucket", "category": "code", "label": "Bitbucket"},
     {"provider": "slack", "category": "communication", "label": "Slack"},
     {"provider": "msteams", "category": "communication", "label": "Microsoft Teams", "coming_soon": True},
@@ -188,6 +196,29 @@ def list_live_refs(db: Session, org_id: str, repo: models.Repository, ref_type: 
     token = crypto.decrypt(integration.credential_encrypted)
     try:
         fn = getattr(git_hosting, f"list_{ref_type}_{repo.provider}")
+        return fn(token=token, base_url=integration.base_url, full_name=repo.full_name)
+    except git_hosting.CredentialError as exc:
+        code = {"invalid_credentials": status.HTTP_401_UNAUTHORIZED, "provider_unreachable": status.HTTP_502_BAD_GATEWAY}.get(
+            exc.code, status.HTTP_502_BAD_GATEWAY
+        )
+        raise HTTPException(code, detail=exc.code) from exc
+
+
+def list_live_pull_requests(db: Session, org_id: str, repo: models.Repository) -> list[dict]:
+    """Open pull/merge requests for `repo` from its connected github/gitlab
+    integration's stored credential — backs the PR picker on "Review a
+    Pull Request", so a review targets a real, existing PR instead of a
+    hand-typed number/title. Same no-mock-fallback contract as
+    `list_live_refs`: without a live, credentialed integration this
+    returns [] and the caller falls back to manual entry."""
+    if repo.provider not in _LIVE_PROVIDERS:
+        return []
+    integration = db.query(models.Integration).filter_by(org_id=org_id, provider=repo.provider).first()
+    if not integration or not integration.credential_encrypted:
+        return []
+    token = crypto.decrypt(integration.credential_encrypted)
+    try:
+        fn = getattr(git_hosting, f"list_pull_requests_{repo.provider}")
         return fn(token=token, base_url=integration.base_url, full_name=repo.full_name)
     except git_hosting.CredentialError as exc:
         code = {"invalid_credentials": status.HTTP_401_UNAUTHORIZED, "provider_unreachable": status.HTTP_502_BAD_GATEWAY}.get(

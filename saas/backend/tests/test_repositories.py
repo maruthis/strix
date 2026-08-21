@@ -276,3 +276,106 @@ def test_list_repository_refs_surfaces_revoked_credential_as_401(auth_client, mo
     res = client.get(f"/api/repositories/{repo_id}/refs")
     assert res.status_code == 401
     assert res.json()["detail"] == "invalid_credentials"
+
+
+def test_list_repository_pull_requests_returns_empty_without_a_connected_integration(auth_client):
+    client, _org = auth_client
+    add = client.post("/api/repositories", json={"full_name": "acme/x"})
+    repo_id = add.json()["id"]
+
+    res = client.get(f"/api/repositories/{repo_id}/pull-requests")
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_list_repository_pull_requests_lists_open_prs_once_github_is_connected(auth_client, monkeypatch):
+    from app.providers import git_hosting
+
+    client, _org = auth_client
+    monkeypatch.setattr(git_hosting, "verify_github", lambda *, token, base_url: "octocat")
+    client.post("/api/integrations/github/connect", json={"account_label": "octocat", "credential": "ghp_real"})
+    add = client.post("/api/repositories", json={"full_name": "octocat/widgets", "provider": "github"})
+    repo_id = add.json()["id"]
+
+    seen = {}
+
+    def fake_list_prs(*, token, base_url, full_name):
+        seen["full_name"] = full_name
+        return [
+            {
+                "number": 42,
+                "title": "Add wallet withdraw endpoint",
+                "author": "octocat",
+                "source_branch": "feature/withdraw",
+                "target_branch": "main",
+                "url": "https://github.com/octocat/widgets/pull/42",
+            }
+        ]
+
+    monkeypatch.setattr(git_hosting, "list_pull_requests_github", fake_list_prs)
+    res = client.get(f"/api/repositories/{repo_id}/pull-requests")
+    assert res.status_code == 200
+    assert res.json() == [
+        {
+            "number": 42,
+            "title": "Add wallet withdraw endpoint",
+            "author": "octocat",
+            "source_branch": "feature/withdraw",
+            "target_branch": "main",
+            "url": "https://github.com/octocat/widgets/pull/42",
+        }
+    ]
+    assert seen["full_name"] == "octocat/widgets"
+
+
+def test_list_repository_pull_requests_lists_open_mrs_once_gitlab_is_connected(auth_client, monkeypatch):
+    from app.providers import git_hosting
+
+    client, _org = auth_client
+    monkeypatch.setattr(git_hosting, "verify_gitlab", lambda *, token, base_url: "laplacian")
+    client.post("/api/integrations/gitlab/connect", json={"account_label": "laplacian", "credential": "glpat_real"})
+    add = client.post("/api/repositories", json={"full_name": "acme-group/widgets", "provider": "gitlab"})
+    repo_id = add.json()["id"]
+
+    monkeypatch.setattr(
+        git_hosting,
+        "list_pull_requests_gitlab",
+        lambda *, token, base_url, full_name: [
+            {
+                "number": 7,
+                "title": "Fix CORS misconfiguration",
+                "author": "laplacian",
+                "source_branch": "fix/cors",
+                "target_branch": "main",
+                "url": "https://gitlab.com/acme-group/widgets/-/merge_requests/7",
+            }
+        ],
+    )
+    res = client.get(f"/api/repositories/{repo_id}/pull-requests")
+    assert res.status_code == 200
+    assert res.json()[0]["number"] == 7
+    assert res.json()[0]["title"] == "Fix CORS misconfiguration"
+
+
+def test_list_repository_pull_requests_not_found_for_unknown_repo(auth_client):
+    client, _org = auth_client
+    res = client.get("/api/repositories/does-not-exist/pull-requests")
+    assert res.status_code == 404
+
+
+def test_list_repository_pull_requests_surfaces_revoked_credential_as_401(auth_client, monkeypatch):
+    from app.providers import git_hosting
+
+    client, _org = auth_client
+    monkeypatch.setattr(git_hosting, "verify_github", lambda *, token, base_url: "octocat")
+    client.post("/api/integrations/github/connect", json={"account_label": "octocat", "credential": "ghp_real"})
+    add = client.post("/api/repositories", json={"full_name": "octocat/widgets", "provider": "github"})
+    repo_id = add.json()["id"]
+
+    def fake_list(*, token, base_url, full_name):
+        raise git_hosting.CredentialError("invalid_credentials")
+
+    monkeypatch.setattr(git_hosting, "list_pull_requests_github", fake_list)
+    res = client.get(f"/api/repositories/{repo_id}/pull-requests")
+    assert res.status_code == 401
+    assert res.json()["detail"] == "invalid_credentials"

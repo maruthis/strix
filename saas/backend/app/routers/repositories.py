@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..deps import current_org, current_user, db_dep, require_admin
 from ..providers.github import MockGitHubProvider
-from .integrations import REF_TYPES, list_live_refs, list_live_repos
+from .integrations import REF_TYPES, list_live_pull_requests, list_live_refs, list_live_repos
 from ..audit import record_audit as _record_audit
 from .pentests import create_and_enqueue_pentest
 
@@ -155,6 +155,22 @@ def list_repository_refs(
     if not repo or repo.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
     return list_live_refs(db, org.id, repo, ref_type)
+
+
+@router.get("/{repository_id}/pull-requests")
+def list_repository_pull_requests(
+    repository_id: str,
+    org: models.Organization = Depends(current_org),
+    db: Session = Depends(db_dep),
+) -> list[dict]:
+    """Open pull/merge requests for the "Review a Pull Request" picker —
+    see `list_live_pull_requests`. Empty (not an error) when the repo's
+    integration isn't connected with a live credential; the frontend falls
+    back to manual PR number/title entry either way."""
+    repo = db.get(models.Repository, repository_id)
+    if not repo or repo.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    return list_live_pull_requests(db, org.id, repo)
 
 
 @router.post("/{repository_id}/scan")

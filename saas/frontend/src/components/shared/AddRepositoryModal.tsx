@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import type { InstallableRepo } from "../../api/types";
 import { Modal } from "./Modal";
-import { Button } from "./Form";
+import { Button, TextInput } from "./Form";
 import { toast } from "./Toast";
 import { cn } from "../../lib/cn";
 
@@ -17,6 +17,7 @@ const PROVIDER_LABEL = { github: "GitHub", gitlab: "GitLab" };
 export function AddRepositoryModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [provider, setProvider] = useState<Provider>("github");
+  const [search, setSearch] = useState("");
   const Icon = PROVIDER_ICON[provider];
 
   const { data: installable, isLoading } = useQuery({
@@ -24,6 +25,8 @@ export function AddRepositoryModal({ open, onClose }: { open: boolean; onClose: 
     queryFn: () => api.get<InstallableRepo[]>(`/api/repositories/installable?provider=${provider}`),
     enabled: open,
   });
+
+  const filtered = (installable ?? []).filter((repo) => repo.full_name.toLowerCase().includes(search.toLowerCase()));
 
   const add = useMutation({
     mutationFn: (repo: InstallableRepo) => api.post("/api/repositories", { full_name: repo.full_name, default_branch: repo.default_branch, provider }),
@@ -41,7 +44,10 @@ export function AddRepositoryModal({ open, onClose }: { open: boolean; onClose: 
           <button
             key={p}
             type="button"
-            onClick={() => setProvider(p)}
+            onClick={() => {
+              setProvider(p);
+              setSearch("");
+            }}
             className={cn(
               "flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-sm transition-colors",
               provider === p ? "bg-white text-black" : "text-[#888] hover:text-white"
@@ -53,6 +59,10 @@ export function AddRepositoryModal({ open, onClose }: { open: boolean; onClose: 
         ))}
       </div>
 
+      {!isLoading && (installable?.length ?? 0) > 0 && (
+        <TextInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search repositories" className="mb-3" />
+      )}
+
       <div className="max-h-[min(60vh,420px)] space-y-1.5 overflow-y-auto pr-1">
         {!isLoading && installable?.length === 0 && (
           <p className="py-6 text-center text-sm text-[#666]">
@@ -63,7 +73,10 @@ export function AddRepositoryModal({ open, onClose }: { open: boolean; onClose: 
             .
           </p>
         )}
-        {installable?.map((repo) => (
+        {!isLoading && installable && installable.length > 0 && filtered.length === 0 && (
+          <p className="py-6 text-center text-sm text-[#666]">No repositories match "{search}".</p>
+        )}
+        {filtered.map((repo) => (
           <div key={repo.full_name} className="flex items-center justify-between gap-4 rounded-lg border border-[#222] px-3 py-2.5">
             <div className="flex min-w-0 items-center gap-2 text-sm text-white">
               <Icon size={15} className="shrink-0 text-[#888]" />

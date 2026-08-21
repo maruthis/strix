@@ -1,6 +1,6 @@
 from app.db import SessionLocal
 from app.providers import git_hosting
-from app.routers.integrations import list_live_refs, list_live_repos
+from app.routers.integrations import list_live_pull_requests, list_live_refs, list_live_repos
 
 from .conftest import add_member
 
@@ -21,10 +21,12 @@ def test_list_integrations_starts_all_disconnected(auth_client):
     assert github["category"] == "code"
     assert github["coming_soon"] is False
     assert github["live"] is True
-    assert github["configure_url"] == "https://github.com/settings/installations"
+    # No configure_url: it's a per-org access token, not a GitHub-App-style
+    # installation, so there's no provider-side settings page to link to.
+    assert github["configure_url"] is None
     gitlab = next(i for i in body if i["provider"] == "gitlab")
     assert gitlab["live"] is True
-    assert gitlab["configure_url"] == "https://gitlab.com/-/user_settings/applications"
+    assert gitlab["configure_url"] is None
     bitbucket = next(i for i in body if i["provider"] == "bitbucket")
     assert bitbucket["configure_url"] is None
     assert bitbucket["live"] is False
@@ -206,6 +208,36 @@ def test_list_live_refs_returns_empty_for_an_invalid_ref_type(auth_client):
         db.commit()
         db.refresh(repo)
         assert list_live_refs(db, org["id"], repo, "not-a-real-type") == []
+    finally:
+        db.close()
+
+
+def test_list_live_pull_requests_returns_empty_for_a_non_live_provider(auth_client):
+    from app import models
+
+    _client, org = auth_client
+    db = SessionLocal()
+    try:
+        repo = models.Repository(org_id=org["id"], full_name="acme/x", provider="bitbucket")
+        db.add(repo)
+        db.commit()
+        db.refresh(repo)
+        assert list_live_pull_requests(db, org["id"], repo) == []
+    finally:
+        db.close()
+
+
+def test_list_live_pull_requests_returns_empty_without_a_stored_credential(auth_client):
+    from app import models
+
+    _client, org = auth_client
+    db = SessionLocal()
+    try:
+        repo = models.Repository(org_id=org["id"], full_name="acme/x", provider="github")
+        db.add(repo)
+        db.commit()
+        db.refresh(repo)
+        assert list_live_pull_requests(db, org["id"], repo) == []
     finally:
         db.close()
 

@@ -138,6 +138,9 @@ function IssueRow({ issue }: { issue: Issue }) {
       <div className="flex items-center gap-2">
         <StatusPill value={issue.status} />
         <StatusPill value={issue.severity} />
+        {issue.source === "baseline_scan" && (
+          <StatusPill value="baseline_scan" label="Automatically detected" />
+        )}
       </div>
     </Link>
   );

@@ -49,6 +49,7 @@ from strix.report.state import (
     set_global_report_state,
 )
 from strix.runtime import session_manager
+from strix.scan.baseline import run_baseline_scan
 from strix.telemetry.logging import set_scan_id, setup_scan_logging
 from strix.tools.output_store import (
     WORKSPACE_SPILL_DIR,
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
     from agents.result import RunResultBase
 
     from strix.runtime.status import StatusSink
+    from strix.scan.baseline import BaselineResult
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,42 @@ def _merge_root_prompt_context(
             f"{sorted(reserved_keys)}",
         )
     return {**scope_context, **extra_system_prompt_context}
+
+
+_BASELINE_FINDING_CLASS = {"dependencies": "dependency_cve"}
+
+
+def _persist_baseline_artifacts(run_dir: Path, result: BaselineResult) -> None:
+    baseline_dir = run_dir / "baseline"
+    try:
+        baseline_dir.mkdir(parents=True, exist_ok=True)
+        for tool, payload in result.raw_output.items():
+            (baseline_dir / f"{tool}.json").write_text(
+                json.dumps(payload, indent=2), encoding="utf-8"
+            )
+    except OSError:
+        logger.exception("failed to persist baseline scan artifacts to %s", baseline_dir)
+
+
+def _file_baseline_findings(report_state: ReportState, result: BaselineResult) -> None:
+    for finding in result.findings:
+        try:
+            report_state.add_vulnerability_report(
+                title=finding.title,
+                severity=finding.severity,
+                description=finding.description or None,
+                target=finding.target,
+                evidence=finding.evidence,
+                cve=finding.cve,
+                cwe=finding.cwe,
+                remediation_steps=finding.remediation_steps,
+                dependency_metadata=finding.dependency_metadata,
+                finding_class=_BASELINE_FINDING_CLASS.get(finding.category),
+                source="baseline_scan",
+                coverage_category=finding.category,
+            )
+        except Exception:
+            logger.exception("failed to file baseline finding: %s", finding.title)
 
 
 def _compose_root_instructions_override(
@@ -286,6 +324,17 @@ async def run_strix_scan(
         is_whitebox = is_whitebox_scan(targets)
         skills = list(scan_config.get("skills") or [])
         root_task = build_root_task(scan_config)
+
+        baseline_result: BaselineResult | None = None
+        if not is_resume and local_sources and settings.baseline.enabled:
+            report("Running baseline scan (dependencies, secrets, IaC)")
+            baseline_result = await asyncio.to_thread(
+                run_baseline_scan, local_sources, settings.baseline.timeout
+            )
+            _persist_baseline_artifacts(run_dir, baseline_result)
+            if report_state is not None:
+                _file_baseline_findings(report_state, baseline_result)
+
         model_settings = make_model_settings(
             settings.llm.reasoning_effort,
             model_name=resolved_model,
@@ -315,6 +364,8 @@ async def run_strix_scan(
 
         scope_context = build_scope_context(scan_config)
         root_context = _merge_root_prompt_context(scope_context, extra_system_prompt_context)
+        if baseline_result is not None:
+            root_context = {**root_context, "baseline_scan_summary": baseline_result.summary_text()}
         root_instructions = _compose_root_instructions_override(
             root_instructions_override,
             skills=skills,

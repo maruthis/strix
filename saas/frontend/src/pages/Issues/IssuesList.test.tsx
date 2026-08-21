@@ -152,6 +152,24 @@ describe("IssuesList", () => {
     });
   });
 
+  it("shows an Automatically detected badge for a baseline-scan finding", async () => {
+    mockIssuesEnv({
+      items: [makeIssue({ source: "baseline_scan" })],
+      severity_counts: { critical: 1, high: 0, medium: 0, low: 0 },
+      status_counts: { all: 1, open: 1 },
+    });
+    renderWithProviders(<IssuesList />);
+    await screen.findByText("SQL injection");
+    expect(screen.getByText("Automatically detected")).toBeInTheDocument();
+  });
+
+  it("omits the badge for an agent-validated finding", async () => {
+    mockIssuesEnv(RESPONSE);
+    renderWithProviders(<IssuesList />);
+    await screen.findByText("SQL injection");
+    expect(screen.queryByText("Automatically detected")).not.toBeInTheDocument();
+  });
+
   it("refetches issues scoped to the selected pentest", async () => {
     const fetchMock = mockIssuesEnv(RESPONSE);
     renderWithProviders(<IssuesList />);

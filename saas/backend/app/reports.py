@@ -297,6 +297,143 @@ a guarantee against all future attacks; new vulnerabilities may emerge and confi
 """
 
 
+def render_pr_review_report_html(
+    review: models.PRReview, repo: models.Repository, issues: list[models.Issue], org: models.Organization
+) -> str:
+    """Same report shape as `render_report_html`, adapted for a PR review's
+    fields instead of a Pentest's — reuses every finding-rendering helper
+    above so the two report types stay visually and structurally
+    consistent."""
+    counts = _counts(issues)
+    total = sum(counts.values())
+    posture = _posture(counts)
+    posture_color = {"Weak": "#c0392b", "Moderate": "#c98a1f", "Good": "#2e7d32", "Strong": "#2e7d32"}[posture]
+    sorted_issues = sorted(
+        issues,
+        key=lambda i: (SEVERITY_ORDER.index(i.severity) if i.severity in SEVERITY_ORDER else 99, i.title),
+    )
+
+    snapshot_rows = "\n".join(_finding_row(i, issue) for i, issue in enumerate(sorted_issues, start=1))
+    detail_blocks = "\n".join(_finding_detail(i, issue) for i, issue in enumerate(sorted_issues, start=1))
+
+    pr_label = f"{repo.full_name} #{review.pr_number}"
+    base_branch = review.target_branch or repo.default_branch
+
+    findings_or_none = (
+        f"""
+        <div class="chart">{_summary_bar(counts)}</div>
+        <table class="std-table">
+          <tr><th>VID</th><th>Name of the Vulnerability</th><th>Severity</th><th>Current Status</th></tr>
+          {snapshot_rows}
+        </table>
+        """
+        if issues
+        else '<p class="muted">No vulnerabilities were identified in this pull request\'s changes.</p>'
+    )
+
+    details_or_none = detail_blocks if issues else ""
+
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>{_esc(pr_label)} - PR Security Review</title>
+<style>
+  @page {{ size: A4; margin: 2.2cm 1.8cm; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: Helvetica, Arial, sans-serif; color: #1a1a1a; font-size: 12px; line-height: 1.5; }}
+  h1 {{ font-size: 26px; color: #1d4ed8; margin-bottom: 4px; }}
+  h2 {{ font-size: 18px; color: #1d4ed8; border-bottom: 1px solid #ddd; padding-bottom: 6px; margin-top: 32px; }}
+  h3 {{ font-size: 14px; color: #1d4ed8; margin-top: 20px; margin-bottom: 6px; }}
+  .cover {{ text-align: center; padding-top: 120px; }}
+  .cover .brand {{ font-size: 13px; letter-spacing: 2px; color: #888; text-transform: uppercase; }}
+  .cover h1 {{ font-size: 30px; margin-top: 24px; }}
+  .cover .meta {{ margin-top: 60px; font-size: 13px; color: #444; }}
+  table {{ width: 100%; border-collapse: collapse; margin: 10px 0 18px; }}
+  .std-table th, .std-table td, .exec-table th, .exec-table td, .detail-table th, .detail-table td {{
+    border: 1px solid #ccc; padding: 6px 8px; text-align: left; vertical-align: top; font-size: 11px;
+  }}
+  .std-table th {{ background: #f2f4f8; }}
+  .exec-table th {{ width: 26%; background: #f2f4f8; }}
+  .detail-table th {{ width: 24%; background: #f7f7f7; font-weight: 600; }}
+  .finding-block {{ page-break-inside: avoid; margin-bottom: 10px; }}
+  .chart {{ margin: 14px 0 20px; }}
+  .bar-row {{ display: flex; align-items: center; margin-bottom: 6px; }}
+  .bar-label {{ width: 70px; font-size: 11px; }}
+  .bar-track {{ flex: 1; background: #eee; height: 14px; border-radius: 3px; overflow: hidden; }}
+  .bar-fill {{ height: 100%; }}
+  .bar-count {{ width: 30px; text-align: right; font-size: 11px; }}
+  .muted {{ color: #666; }}
+  .posture {{ font-weight: 700; }}
+  .footer-note {{ margin-top: 40px; font-size: 10px; color: #999; }}
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="brand">Pull Request Security Review</div>
+  <h1>{_esc(pr_label)}</h1>
+  <div class="meta">
+    Prepared for: {_esc(org.name)}<br/>
+    Prepared by: Strix Security<br/>
+    Report Date: {_fmt_month(review.updated_at or review.created_at)}<br/>
+    PR Review ID: {review.id}
+  </div>
+</div>
+
+<div style="page-break-before: always;"></div>
+
+<h2>Executive Summary</h2>
+<p>This section summarizes the automated security review of pull request {_esc(pr_label)}, highlighting its principal findings and overall security posture.</p>
+<table class="exec-table">
+  <tr><th>Review Date</th><td>{_fmt_month(review.created_at)}</td></tr>
+  <tr><th>Repository</th><td>{_esc(repo.full_name)}</td></tr>
+  <tr><th>Pull Request</th><td>#{review.pr_number} &mdash; {_esc(review.title)}</td></tr>
+  <tr><th>Author</th><td>{_esc(review.author)}</td></tr>
+  <tr><th>Base Branch</th><td>{_esc(base_branch)}</td></tr>
+  <tr><th>Reviewed Commit</th><td>{_esc(review.resolved_head_sha) or "N/A"}</td></tr>
+  <tr><th>Scope</th><td>Diff-Scoped Source Code Analysis (SAST, SCA) &mdash; this PR's changed files</td></tr>
+  <tr><th>Methodology</th><td>This review is conducted following the NIST framework, OWASP Top 10, and industry best practices.</td></tr>
+  <tr><th>Overall Security Posture</th><td class="posture" style="color:{posture_color}">{posture}</td></tr>
+  <tr><th>Total Findings</th><td>{total} ({counts['critical']} Critical, {counts['high']} High, {counts['medium']} Medium, {counts['low']} Low)</td></tr>
+  <tr><th>Recommendations</th><td>Plan to fix the Critical/High/Medium severity vulnerabilities reported before merging.</td></tr>
+</table>
+
+<h2>Summary of All Findings</h2>
+{findings_or_none}
+
+<h2>Vulnerability Details</h2>
+{details_or_none}
+
+<h2>Limitations and Exclusions</h2>
+<p>This review was performed using automated scanning augmented by AI-driven manual analysis, scoped to this pull
+request's changed files diffed against {_esc(base_branch)}. Findings reflect the security posture of the PR's
+changes at the time of review and are not a guarantee against future vulnerabilities. Issues pre-existing outside
+the diff, business logic requiring live operator context, and social engineering were outside the scope of this
+review.</p>
+
+<h2>Best Practices</h2>
+<table class="std-table">
+  <tr><th style="width:28%">Area</th><th>Guidance</th></tr>
+  {"".join(f"<tr><td><b>{_esc(name)}</b></td><td>{_esc(desc)}</td></tr>" for name, desc in _BEST_PRACTICES)}
+</table>
+
+<h2>Conclusion</h2>
+<p>{_esc(pr_label)} currently has {counts['critical']} Critical, {counts['high']} High, {counts['medium']} Medium and {counts['low']} Low
+severity findings, totalling {total}. It is advisable to remediate Critical and High severity findings before merging.</p>
+
+<h2>Disclaimer</h2>
+<p class="muted">This report and its contents are confidential and should be shared only with authorized personnel. Findings are based on the
+agreed-upon scope and methodology described above. This report reflects the security posture of the target at the time of testing and is not
+a guarantee against all future attacks; new vulnerabilities may emerge and configurations may change.</p>
+
+<div class="footer-note">Generated by Strix &middot; PR Review ID {review.id} &middot; {total} finding(s)</div>
+
+</body>
+</html>
+"""
+
+
 def render_report_pdf(html: str) -> bytes:
     from xhtml2pdf import pisa
 

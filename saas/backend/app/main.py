@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import jobs, models
+from . import jobs, models, scheduler
 from .audit import record_audit
 from .db import SessionLocal, init_db
 from .middleware import RequestLogMiddleware
@@ -45,7 +45,9 @@ async def lifespan(app: FastAPI):
     init_db()
     _reconcile_interrupted_pentests()
     await jobs.start_worker()
+    await scheduler.start()
     yield
+    await scheduler.stop()
     await jobs.stop_worker()
 
 

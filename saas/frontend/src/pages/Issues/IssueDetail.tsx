@@ -57,6 +57,9 @@ export default function IssueDetail() {
         <div>
           <div className="mb-2 flex items-center gap-2">
             <StatusPill value={issue.severity} />
+            {issue.source === "baseline_scan" && (
+              <StatusPill value="baseline_scan" label="Automatically detected" />
+            )}
             {issue.cvss !== null && <span className="text-xs text-[#666]">CVSS {issue.cvss.toFixed(1)}</span>}
           </div>
           <h1 className="text-lg font-semibold text-white">{issue.title}</h1>

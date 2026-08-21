@@ -73,3 +73,45 @@ def test_finish_still_enforces_the_narrative_fields_alongside_the_checklist() ->
     result = _finish(executive_summary="   ")
     assert result["success"] is False
     assert any("Executive summary" in e for e in result["errors"])
+
+
+class _FakeReportStateWithBaselineCounts:
+    def __init__(self, counts: dict[str, int]) -> None:
+        self._counts = counts
+        self.vulnerability_reports: list[dict[str, object]] = []
+
+    def get_baseline_finding_counts(self) -> dict[str, int]:
+        return self._counts
+
+    def update_scan_final_fields(self, **_kwargs: object) -> None:
+        return None
+
+
+def test_finish_rejects_a_checklist_note_that_ignores_baseline_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "strix.report.state.get_global_report_state",
+        lambda: _FakeReportStateWithBaselineCounts({"dependencies": 3}),
+    )
+    result = _finish(coverage_checklist=_full_checklist())
+    assert result["success"] is False
+    assert any(
+        "dependencies" in e and "3" in e and "baseline-scan finding" in e
+        for e in result["errors"]
+    )
+
+
+def test_finish_accepts_a_checklist_note_that_cites_the_baseline_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "strix.report.state.get_global_report_state",
+        lambda: _FakeReportStateWithBaselineCounts({"dependencies": 3}),
+    )
+    result = _finish(
+        coverage_checklist=_full_checklist(
+            dependencies="baseline scan filed 3 dependency CVEs, reviewed and triaged each"
+        )
+    )
+    assert result["success"] is True

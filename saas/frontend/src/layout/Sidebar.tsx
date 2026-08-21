@@ -4,7 +4,6 @@ import {
   Search,
   AlertTriangle,
   GitPullRequest,
-  Boxes,
   MessageSquare,
   Layers,
   Globe,
@@ -13,7 +12,6 @@ import {
   Puzzle,
   Settings,
   ChevronDown,
-  Gift,
   Lock,
 } from "lucide-react";
 import { useState } from "react";
@@ -25,7 +23,6 @@ const NAV = [
   { to: "/pentests", label: "Pentests", icon: Search },
   { to: "/issues", label: "Issues", icon: AlertTriangle },
   { to: "/pr-reviews", label: "PR Reviews", icon: GitPullRequest },
-  { to: "/supply-chain", label: "Supply Chain", icon: Boxes, locked: true },
   { to: "/chat", label: "Chat", icon: MessageSquare },
 ];
 
@@ -120,10 +117,6 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-[#1a1a1a] p-3">
-        <button className="mb-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-[#aaa] hover:bg-[rgba(255,255,255,0.06)] hover:text-white">
-          <Gift size={16} />
-          Refer &amp; earn
-        </button>
         <button
           onClick={() => logout()}
           className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-[rgba(255,255,255,0.06)]"

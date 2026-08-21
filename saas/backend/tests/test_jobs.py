@@ -323,6 +323,7 @@ async def test_run_real_scan_reads_and_translates_real_findings(monkeypatch, tmp
             "target": "",
             "endpoint": "",
             "fix_effort": "medium",
+            "source": None,
         },
         {
             "title": "Missing field defaults",
@@ -336,6 +337,7 @@ async def test_run_real_scan_reads_and_translates_real_findings(monkeypatch, tmp
             "target": "",
             "endpoint": "/e",
             "fix_effort": "high",
+            "source": None,
         },
     ]
 
@@ -534,7 +536,16 @@ async def test_run_pentest_end_to_end_with_real_scan_creates_issues_from_transla
     vulnerabilities.json becomes real Issue rows tied to the selected
     repository, exactly like the mock path already does."""
     (tmp_path / "vulnerabilities.json").write_text(
-        json.dumps([{"title": "Real finding from the engine", "severity": "high", "cvss": 7.5}]),
+        json.dumps(
+            [
+                {
+                    "title": "Real finding from the engine",
+                    "severity": "high",
+                    "cvss": 7.5,
+                    "source": "baseline_scan",
+                }
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -568,6 +579,29 @@ async def test_run_pentest_end_to_end_with_real_scan_creates_issues_from_transla
         assert issues[0].title == "Real finding from the engine"
         assert issues[0].repository_id == repo_id
         assert issues[0].severity == "high"
+        assert issues[0].source == "baseline_scan"
+    finally:
+        db.close()
+
+
+async def test_run_pentest_mock_findings_have_no_source(monkeypatch):
+    """MOCK_FINDINGS entries carry no "source" key at all — the Issue-creation
+    loop must default that to None rather than KeyError."""
+    db = SessionLocal()
+    try:
+        org, repo = _make_org_and_repo(db)
+        pentest = _make_pentest(db, org, repo)
+        pentest_id = pentest.id
+    finally:
+        db.close()
+
+    await jobs._run_pentest(pentest_id)
+
+    db = SessionLocal()
+    try:
+        issues = db.query(models.Issue).filter_by(pentest_id=pentest_id).all()
+        assert issues
+        assert all(issue.source is None for issue in issues)
     finally:
         db.close()
 

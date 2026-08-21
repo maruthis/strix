@@ -10,6 +10,7 @@ import PentestDetail from "./pages/Pentests/PentestDetail";
 import IssuesList from "./pages/Issues/IssuesList";
 import IssueDetail from "./pages/Issues/IssueDetail";
 import PRReviewsList from "./pages/PRReviews/PRReviewsList";
+import PRReviewDetail from "./pages/PRReviews/PRReviewDetail";
 import RepositoriesList from "./pages/Repositories/RepositoriesList";
 import DomainsList from "./pages/Domains/DomainsList";
 import DomainDetail from "./pages/Domains/DomainDetail";
@@ -45,6 +46,7 @@ export default function App() {
         <Route path="/issues" element={<IssuesList />} />
         <Route path="/issues/:id" element={<IssueDetail />} />
         <Route path="/pr-reviews" element={<PRReviewsList />} />
+        <Route path="/pr-reviews/:id" element={<PRReviewDetail />} />
         <Route path="/repositories" element={<RepositoriesList />} />
         <Route path="/domains" element={<DomainsList />} />
         <Route path="/domains/:id" element={<DomainDetail />} />
