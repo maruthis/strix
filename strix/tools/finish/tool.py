@@ -15,6 +15,55 @@ from strix.core.agents import coordinator_from_context
 logger = logging.getLogger(__name__)
 
 
+# Standing coverage categories a scan must account for before it's allowed to
+# finish — see finish_scan's docstring for what belongs in each. This exists
+# because leaving category coverage entirely to the root agent's judgment
+# let real runs finish after spawning e.g. only a secrets + dependency agent,
+# silently skipping auth/access-control/injection/infra review altogether.
+# This doesn't guarantee those categories were actually investigated well —
+# only that the agent had to explicitly say something about each rather than
+# quietly never thinking about it.
+REQUIRED_COVERAGE_CATEGORIES: tuple[str, ...] = (
+    "dependencies",
+    "secrets",
+    "access_control",
+    "authentication",
+    "injection",
+    "extension_points",
+    "infrastructure",
+)
+
+_MIN_COVERAGE_NOTE_LENGTH = 15
+
+
+def _validate_coverage_checklist(coverage_checklist: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    missing = [c for c in REQUIRED_COVERAGE_CATEGORIES if c not in coverage_checklist]
+    if missing:
+        errors.append(
+            "coverage_checklist is missing required categories: "
+            f"{', '.join(missing)}. Every category in "
+            f"{', '.join(REQUIRED_COVERAGE_CATEGORIES)} must have an entry."
+        )
+    unknown = [c for c in coverage_checklist if c not in REQUIRED_COVERAGE_CATEGORIES]
+    if unknown:
+        errors.append(
+            f"coverage_checklist has unrecognized categories: {', '.join(unknown)}. "
+            f"Valid categories are: {', '.join(REQUIRED_COVERAGE_CATEGORIES)}."
+        )
+    for category in REQUIRED_COVERAGE_CATEGORIES:
+        note = coverage_checklist.get(category, "")
+        if not note.strip():
+            errors.append(f"coverage_checklist['{category}'] cannot be empty")
+        elif len(note.strip()) < _MIN_COVERAGE_NOTE_LENGTH:
+            errors.append(
+                f"coverage_checklist['{category}'] is too short to be a real note "
+                f"('{note.strip()}') — state what was checked/found, or the specific "
+                "reason this category doesn't apply to this target. Not a one-word dismissal."
+            )
+    return errors
+
+
 def _do_finish(
     *,
     parent_id: str | None,
@@ -22,6 +71,7 @@ def _do_finish(
     methodology: str,
     technical_analysis: str,
     recommendations: str,
+    coverage_checklist: dict[str, str],
 ) -> dict[str, Any]:
     if parent_id is not None:
         return {
@@ -41,6 +91,7 @@ def _do_finish(
         errors.append("Technical analysis cannot be empty")
     if not recommendations.strip():
         errors.append("Recommendations cannot be empty")
+    errors.extend(_validate_coverage_checklist(coverage_checklist))
     if errors:
         return {"success": False, "error": "Validation failed", "errors": errors}
 
@@ -79,13 +130,14 @@ def _do_finish(
         }
 
 
-@function_tool(timeout=60)
+@function_tool(timeout=60, strict_mode=False)
 async def finish_scan(
     ctx: RunContextWrapper,
     executive_summary: str,
     methodology: str,
     technical_analysis: str,
     recommendations: str,
+    coverage_checklist: dict[str, str],
 ) -> str:
     """Finalize the scan — persist the customer-facing report.
 
@@ -141,6 +193,31 @@ async def finish_scan(
        chain after a serious attempt is acceptable; skipping the
        chaining reasoning, or ignoring a plausibly-related combination,
        is not.
+    5. **Coverage checklist — required, not optional.** ``coverage_checklist``
+       must have an entry for every one of these categories, or the call is
+       rejected:
+
+       - ``dependencies`` — SCA / supply-chain (vulnerable package versions)
+       - ``secrets`` — credential/key exposure, including git history, not
+         just the current working tree
+       - ``access_control`` — IDOR, RBAC/authorization checks, path
+         traversal (including symlink-based)
+       - ``authentication`` — auth flows, IdP/OAuth/CORS config, session and
+         token lifecycle (issuance, expiry, revocation), rate limiting
+       - ``injection`` — SQLi, XSS, command injection, SSRF
+       - ``extension_points`` — plugin/MCP/agent-tool execution paths,
+         backup/restore or other integrity-sensitive import paths
+       - ``infrastructure`` — IaC (Kubernetes/Docker manifests), CI/CD
+         pipeline configuration
+
+       Each value is one to a few sentences: either what was checked and by
+       which agent (cite a real finding or "reviewed, no issue found"), or —
+       if the category has no surface in this target — the *specific*
+       reason (e.g. "no IaC/CI files present in this repository", not "not
+       applicable"). A category that was never actually looked at does not
+       get a note claiming otherwise — if you haven't covered it yet, go
+       spawn an agent for it before calling this tool, don't just write
+       something plausible-sounding to get past the gate.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.
@@ -246,6 +323,9 @@ async def finish_scan(
         methodology: Frameworks, scope, and approach.
         technical_analysis: Consolidated findings + systemic themes.
         recommendations: Prioritized, actionable remediation.
+        coverage_checklist: One entry per required category (see item 5 of
+            the pre-flight checklist above) stating what was covered or why
+            it doesn't apply to this target.
     """
     inner = ctx.context if isinstance(ctx.context, dict) else {}
     coordinator = coordinator_from_context(inner)
@@ -280,6 +360,7 @@ async def finish_scan(
         methodology=methodology,
         technical_analysis=technical_analysis,
         recommendations=recommendations,
+        coverage_checklist=coverage_checklist,
     )
     if (
         result.get("success")

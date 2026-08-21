@@ -16,6 +16,7 @@ of scope for this path for now; see saas/TASKS.md.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -78,6 +79,31 @@ def list_repos_github(*, token: str, base_url: str | None) -> list[dict[str, Any
     ]
 
 
+def list_branches_github(*, token: str, base_url: str | None, full_name: str) -> list[dict[str, Any]]:
+    url = f"{_github_api_base(base_url)}/repos/{full_name}/branches?per_page=100"
+    data = _get_json(url, _github_headers(token))
+    return [{"name": b["name"], "commit_sha": b["commit"]["sha"]} for b in data]
+
+
+def list_tags_github(*, token: str, base_url: str | None, full_name: str) -> list[dict[str, Any]]:
+    url = f"{_github_api_base(base_url)}/repos/{full_name}/tags?per_page=100"
+    data = _get_json(url, _github_headers(token))
+    return [{"name": t["name"], "commit_sha": t["commit"]["sha"]} for t in data]
+
+
+def list_commits_github(*, token: str, base_url: str | None, full_name: str) -> list[dict[str, Any]]:
+    url = f"{_github_api_base(base_url)}/repos/{full_name}/commits?per_page=50"
+    data = _get_json(url, _github_headers(token))
+    return [
+        {
+            "sha": c["sha"],
+            "message": (c.get("commit", {}).get("message") or "").split("\n", 1)[0],
+            "author_date": c.get("commit", {}).get("author", {}).get("date"),
+        }
+        for c in data
+    ]
+
+
 def _gitlab_api_base(base_url: str | None) -> str:
     return f"{base_url.rstrip('/')}/api/v4" if base_url else GITLAB_DEFAULT_API_BASE
 
@@ -102,4 +128,30 @@ def list_repos_gitlab(*, token: str, base_url: str | None) -> list[dict[str, Any
             "private": p.get("visibility") != "public",
         }
         for p in data
+    ]
+
+
+def _gitlab_project_id(full_name: str) -> str:
+    # GitLab's REST API accepts a URL-encoded "namespace/path" in place of
+    # the numeric project id.
+    return quote(full_name, safe="")
+
+
+def list_branches_gitlab(*, token: str, base_url: str | None, full_name: str) -> list[dict[str, Any]]:
+    url = f"{_gitlab_api_base(base_url)}/projects/{_gitlab_project_id(full_name)}/repository/branches?per_page=100"
+    data = _get_json(url, _gitlab_headers(token))
+    return [{"name": b["name"], "commit_sha": b["commit"]["id"]} for b in data]
+
+
+def list_tags_gitlab(*, token: str, base_url: str | None, full_name: str) -> list[dict[str, Any]]:
+    url = f"{_gitlab_api_base(base_url)}/projects/{_gitlab_project_id(full_name)}/repository/tags?per_page=100"
+    data = _get_json(url, _gitlab_headers(token))
+    return [{"name": t["name"], "commit_sha": t["commit"]["id"]} for t in data]
+
+
+def list_commits_gitlab(*, token: str, base_url: str | None, full_name: str) -> list[dict[str, Any]]:
+    url = f"{_gitlab_api_base(base_url)}/projects/{_gitlab_project_id(full_name)}/repository/commits?per_page=50"
+    data = _get_json(url, _gitlab_headers(token))
+    return [
+        {"sha": c["id"], "message": (c.get("title") or ""), "author_date": c.get("committed_date")} for c in data
     ]

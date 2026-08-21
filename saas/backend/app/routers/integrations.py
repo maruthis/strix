@@ -168,6 +168,34 @@ def list_live_repos(db: Session, org_id: str, provider: str) -> list[dict] | Non
         raise HTTPException(code, detail=exc.code) from exc
 
 
+REF_TYPES = ("branches", "tags", "commits")
+
+
+def list_live_refs(db: Session, org_id: str, repo: models.Repository, ref_type: str) -> list[dict]:
+    """Branches/tags/commits for `repo` from its connected github/gitlab
+    integration's stored credential — the picklist behind the New Pentest
+    branch/tag/commit selector, so a pentest targets a real, existing ref
+    instead of a hand-typed name that might not exist. Unlike
+    `list_live_repos`, there's no mock fallback: without a live,
+    credentialed integration there's nothing to list, so this returns []
+    rather than a fake catalog (the caller falls back to the repository's
+    plain default_branch when nothing is selected either way)."""
+    if repo.provider not in _LIVE_PROVIDERS or ref_type not in REF_TYPES:
+        return []
+    integration = db.query(models.Integration).filter_by(org_id=org_id, provider=repo.provider).first()
+    if not integration or not integration.credential_encrypted:
+        return []
+    token = crypto.decrypt(integration.credential_encrypted)
+    try:
+        fn = getattr(git_hosting, f"list_{ref_type}_{repo.provider}")
+        return fn(token=token, base_url=integration.base_url, full_name=repo.full_name)
+    except git_hosting.CredentialError as exc:
+        code = {"invalid_credentials": status.HTTP_401_UNAUTHORIZED, "provider_unreachable": status.HTTP_502_BAD_GATEWAY}.get(
+            exc.code, status.HTTP_502_BAD_GATEWAY
+        )
+        raise HTTPException(code, detail=exc.code) from exc
+
+
 @router.delete("/{provider}")
 def disconnect_integration(
     provider: str,

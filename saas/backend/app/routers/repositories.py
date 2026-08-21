@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..deps import current_org, current_user, db_dep, require_admin
 from ..providers.github import MockGitHubProvider
-from .integrations import list_live_repos
+from .integrations import REF_TYPES, list_live_refs, list_live_repos
 from ..audit import record_audit as _record_audit
 from .pentests import create_and_enqueue_pentest
 
@@ -136,6 +136,25 @@ def remove_repository(
     db.commit()
     _record_audit(db, org.id, user.id, "repository.removed", full_name)
     return {"ok": True}
+
+
+@router.get("/{repository_id}/refs")
+def list_repository_refs(
+    repository_id: str,
+    ref_type: str = "branches",
+    org: models.Organization = Depends(current_org),
+    db: Session = Depends(db_dep),
+) -> list[dict]:
+    """Branches/tags/commits for the New Pentest branch/tag/commit picker —
+    see `list_live_refs`. Empty (not an error) when the repo's integration
+    isn't connected with a live credential; the frontend falls back to
+    letting the scan use the repository's default branch either way."""
+    if ref_type not in REF_TYPES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_ref_type")
+    repo = db.get(models.Repository, repository_id)
+    if not repo or repo.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
+    return list_live_refs(db, org.id, repo, ref_type)
 
 
 @router.post("/{repository_id}/scan")

@@ -35,6 +35,19 @@ export interface Repository {
   open_issues_count: number;
 }
 
+export type RepoRefType = "branches" | "tags" | "commits";
+
+export interface RepoBranchOrTag {
+  name: string;
+  commit_sha: string;
+}
+
+export interface RepoCommit {
+  sha: string;
+  message: string;
+  author_date: string | null;
+}
+
 export interface InstallableRepo {
   full_name: string;
   default_branch: string;
@@ -59,6 +72,8 @@ export interface Pentest {
   target_id: string;
   target_label: string;
   extra_domain_id: string | null;
+  ref: string | null;
+  resolved_commit_sha: string | null;
   scan_mode: string;
   status: PentestStatus;
   started_at: string | null;

@@ -77,6 +77,36 @@ export function Select({
   );
 }
 
+export function RadioGroup({
+  name,
+  value,
+  onChange,
+  options,
+}: {
+  name: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <div className="flex gap-4">
+      {options.map((o) => (
+        <label key={o.value} className="flex cursor-pointer items-center gap-1.5 text-sm text-white">
+          <input
+            type="radio"
+            name={name}
+            value={o.value}
+            checked={value === o.value}
+            onChange={() => onChange(o.value)}
+            className="accent-white"
+          />
+          {o.label}
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <button

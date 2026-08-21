@@ -63,7 +63,17 @@ async def _call_finish_scan(
         tool_arguments="{}",
     )
     fields = ("executive_summary", "methodology", "technical_analysis", "recommendations")
-    result: str = await finish_scan.on_invoke_tool(ctx, json.dumps(dict.fromkeys(fields, "x")))
+    args = dict.fromkeys(fields, "x")
+    args["coverage_checklist"] = {
+        "dependencies": "reviewed, no vulnerable packages found",
+        "secrets": "reviewed working tree and git history, none found",
+        "access_control": "reviewed, no IDOR or authz issues found",
+        "authentication": "reviewed auth flows and session handling, no issues found",
+        "injection": "reviewed input handling, no injection issues found",
+        "extension_points": "no plugin/MCP/extension points present in this target",
+        "infrastructure": "no IaC/CI files present in this target",
+    }
+    result: str = await finish_scan.on_invoke_tool(ctx, json.dumps(args))
     parsed: dict[str, Any] = json.loads(result)
     return parsed
 

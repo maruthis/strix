@@ -139,3 +139,84 @@ def test_list_repos_gitlab_raises_invalid_credentials_on_401(monkeypatch):
     with pytest.raises(git_hosting.CredentialError) as exc_info:
         git_hosting.list_repos_gitlab(token="bad", base_url=None)
     assert exc_info.value.code == "invalid_credentials"
+
+
+def test_list_branches_github_maps_fields(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.github.com/repos/octocat/widgets/branches?per_page=100"
+        return httpx.Response(
+            200,
+            json=[
+                {"name": "main", "commit": {"sha": "aaa111"}},
+                {"name": "dev", "commit": {"sha": "bbb222"}},
+            ],
+        )
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    branches = git_hosting.list_branches_github(token="t", base_url=None, full_name="octocat/widgets")
+    assert branches == [{"name": "main", "commit_sha": "aaa111"}, {"name": "dev", "commit_sha": "bbb222"}]
+
+
+def test_list_tags_github_maps_fields(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.github.com/repos/octocat/widgets/tags?per_page=100"
+        return httpx.Response(200, json=[{"name": "v1.0.0", "commit": {"sha": "ccc333"}}])
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    tags = git_hosting.list_tags_github(token="t", base_url=None, full_name="octocat/widgets")
+    assert tags == [{"name": "v1.0.0", "commit_sha": "ccc333"}]
+
+
+def test_list_commits_github_maps_fields_and_takes_first_message_line(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.github.com/repos/octocat/widgets/commits?per_page=50"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "sha": "ddd444",
+                    "commit": {"message": "Fix the bug\n\nLonger body text here", "author": {"date": "2026-01-01T00:00:00Z"}},
+                }
+            ],
+        )
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    commits = git_hosting.list_commits_github(token="t", base_url=None, full_name="octocat/widgets")
+    assert commits == [{"sha": "ddd444", "message": "Fix the bug", "author_date": "2026-01-01T00:00:00Z"}]
+
+
+def test_list_branches_gitlab_url_encodes_the_project_path(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://gitlab.com/api/v4/projects/acme%2Fwidgets/repository/branches?per_page=100"
+        return httpx.Response(200, json=[{"name": "main", "commit": {"id": "sha1"}}])
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    branches = git_hosting.list_branches_gitlab(token="t", base_url=None, full_name="acme/widgets")
+    assert branches == [{"name": "main", "commit_sha": "sha1"}]
+
+
+def test_list_tags_gitlab_maps_fields(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/repository/tags" in str(request.url)
+        return httpx.Response(200, json=[{"name": "v2.0.0", "commit": {"id": "sha2"}}])
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    tags = git_hosting.list_tags_gitlab(token="t", base_url=None, full_name="acme/widgets")
+    assert tags == [{"name": "v2.0.0", "commit_sha": "sha2"}]
+
+
+def test_list_commits_gitlab_maps_fields(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/repository/commits" in str(request.url)
+        return httpx.Response(200, json=[{"id": "sha3", "title": "Fix the bug", "committed_date": "2026-01-01T00:00:00Z"}])
+
+    monkeypatch.setattr(git_hosting, "_client", _client_with(handler))
+    commits = git_hosting.list_commits_gitlab(token="t", base_url=None, full_name="acme/widgets")
+    assert commits == [{"sha": "sha3", "message": "Fix the bug", "author_date": "2026-01-01T00:00:00Z"}]
+
+
+def test_list_branches_github_raises_invalid_credentials_on_401(monkeypatch):
+    monkeypatch.setattr(git_hosting, "_client", _client_with(lambda r: httpx.Response(401, json={})))
+    with pytest.raises(git_hosting.CredentialError) as exc_info:
+        git_hosting.list_branches_github(token="bad", base_url=None, full_name="octocat/widgets")
+    assert exc_info.value.code == "invalid_credentials"

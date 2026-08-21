@@ -1565,7 +1565,23 @@ def stage_api_specs(targets_info: list[dict[str, Any]], run_name: str) -> list[d
     ]
 
 
-def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None) -> str:
+def clone_repository(
+    repo_url: str,
+    run_name: str,
+    dest_name: str | None = None,
+    ref: str | None = None,
+) -> tuple[str, str]:
+    """Clones `repo_url` into a scan-scoped temp dir.
+
+    `ref` (a branch, tag, or commit SHA) is checked out after cloning when
+    given, instead of leaving the clone on whatever the remote's default
+    branch's HEAD happens to be at the moment of cloning — without this,
+    "the same target" can silently mean a different commit on every run,
+    which makes findings impossible to reproduce or diff against a prior
+    scan. Returns `(clone_path, resolved_commit_sha)` so the caller can
+    record exactly what was scanned, even when `ref` is a moving branch
+    name rather than a fixed SHA.
+    """
     console = Console()
 
     git_executable = shutil.which("git")
@@ -1585,30 +1601,35 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
     if clone_path.exists():
         shutil.rmtree(clone_path)
 
-    try:
-        with console.status(f"[bold cyan]Cloning repository {repo_url}...", spinner="dots"):
-            subprocess.run(  # noqa: S603
-                [
-                    git_executable,
-                    "clone",
-                    repo_url,
-                    str(clone_path),
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
+    def _run(args: list[str], error_message: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(args, capture_output=True, text=True, check=True)  # noqa: S603
+        except subprocess.CalledProcessError as e:
+            detail = e.stderr if hasattr(e, "stderr") and e.stderr else str(e)
+            raise ValueError(f"{error_message}: {detail}") from e
+        except FileNotFoundError as e:
+            raise ValueError(
+                "Git is not installed or not available in PATH. Please install Git to clone repositories."
+            ) from e
+
+    with console.status(f"[bold cyan]Cloning repository {repo_url}...", spinner="dots"):
+        _run(
+            [git_executable, "clone", repo_url, str(clone_path)],
+            f"Could not clone repository {repo_url}",
+        )
+
+        if ref:
+            _run(
+                [git_executable, "-C", str(clone_path), "checkout", ref],
+                f"Could not check out ref '{ref}' in repository {repo_url}",
             )
 
-        return str(clone_path.absolute())
+        resolved = _run(
+            [git_executable, "-C", str(clone_path), "rev-parse", "HEAD"],
+            f"Could not resolve HEAD after cloning repository {repo_url}",
+        )
 
-    except subprocess.CalledProcessError as e:
-        detail = e.stderr if hasattr(e, "stderr") and e.stderr else str(e)
-        raise ValueError(f"Could not clone repository {repo_url}: {detail}") from e
-    except FileNotFoundError as e:
-        raise ValueError(
-            "Git is not installed or not available in PATH. "
-            "Please install Git to clone repositories."
-        ) from e
+    return str(clone_path.absolute()), resolved.stdout.strip()
 
 
 def check_docker_connection() -> Any:

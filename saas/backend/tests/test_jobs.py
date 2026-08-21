@@ -199,7 +199,9 @@ def _install_fake_strix_module(monkeypatch, run_strix_scan, *, run_dir=None, clo
     fake_strix.config = fake_config
 
     fake_utils = types.ModuleType("strix.interface.utils")
-    fake_utils.clone_repository = clone_repository or (lambda url, run_name: f"/tmp/fake-clone/{run_name}")
+    fake_utils.clone_repository = clone_repository or (
+        lambda url, run_name, dest_name, ref: (f"/tmp/fake-clone/{run_name}", "fake-resolved-sha")
+    )
     fake_interface = types.ModuleType("strix.interface")
     fake_interface.utils = fake_utils
     fake_strix.interface = fake_interface
@@ -229,7 +231,7 @@ async def test_run_real_scan_success_path(monkeypatch):
         calls["image"] = image
         calls["local_sources"] = local_sources
 
-    _install_fake_strix_module(monkeypatch, fake_run_strix_scan, clone_repository=lambda url, run_name: f"/tmp/cloned/{run_name}")
+    _install_fake_strix_module(monkeypatch, fake_run_strix_scan, clone_repository=lambda url, run_name, dest_name, ref: (f"/tmp/cloned/{run_name}", "fake-sha"))
 
     db = SessionLocal()
     try:
@@ -543,7 +545,7 @@ async def test_run_pentest_end_to_end_with_real_scan_creates_issues_from_transla
         monkeypatch,
         fake_run_strix_scan,
         run_dir=tmp_path,
-        clone_repository=lambda url, run_name: str(tmp_path),
+        clone_repository=lambda url, run_name, dest_name, ref: (str(tmp_path), "fake-sha"),
     )
     monkeypatch.setattr(jobs.settings, "enable_real_scan", True)
 

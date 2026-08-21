@@ -155,7 +155,7 @@ Spawn specialized agents at each level. Scale horizontally to maximum paralleliz
 - Do NOT overload a single agent with multiple vulnerability types
 - Each agent focuses on one specific area or vulnerability type
 - Creates a massive parallel swarm covering every angle
-- When source is available, always include a dedicated dependency/SCA agent among them (see `coordination/root_agent`'s "Mandatory Agents") — a preceding triage/recon pass ranking risk is not a reason to skip it, and in a monorepo it must check every workspace's own lockfile (see `coordination/source_aware_whitebox`'s "Monorepo Coverage"), not just the first one found
+- Always include a dedicated agent for every category in `coordination/root_agent`'s "Mandatory Agents" (dependencies, secrets, access control, authentication, injection, extension points, infrastructure) — a preceding triage/recon pass ranking risk is not a reason to skip any of them, and `finish_scan` will refuse to complete without a genuine `coverage_checklist` entry for each. For dependencies specifically, a monorepo means checking every workspace's own lockfile (see `coordination/source_aware_whitebox`'s "Monorepo Coverage"), not just the first one found
 
 ## Mindset
 

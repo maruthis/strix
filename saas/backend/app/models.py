@@ -155,6 +155,15 @@ class Pentest(TimestampMixin, Base):
     # cookie flags, and other findings that only exist on a deployed
     # instance and can't be seen from source alone.
     extra_domain_id: Mapped[str | None] = mapped_column(ForeignKey("domains.id"), nullable=True)
+    # Only meaningful when target_type == "repository": the branch, tag, or
+    # commit SHA the caller asked to scan. Falls back to the repository's
+    # default_branch when unset. `ref` is what was requested (often a
+    # moving branch name); `resolved_commit_sha` is filled in once cloned
+    # with the exact commit that was actually scanned, so re-running "the
+    # same" pentest later — or comparing two runs — is reproducible instead
+    # of silently depending on whatever HEAD happened to be at trigger time.
+    ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    resolved_commit_sha: Mapped[str | None] = mapped_column(String, nullable=True)
     scan_mode: Mapped[str] = mapped_column(String, default="deep")
     status: Mapped[str] = mapped_column(String, default="queued")  # queued|running|completed|failed|stopped
     schedule_id: Mapped[str | None] = mapped_column(ForeignKey("pentest_schedules.id"), nullable=True)

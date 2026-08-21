@@ -184,3 +184,95 @@ def test_add_gitlab_repository(auth_client):
     # Same full_name under a different provider is not a conflict.
     other = client.post("/api/repositories", json={"full_name": "acme-group/widgets", "provider": "github"})
     assert other.status_code == 200
+
+
+def test_list_repository_refs_returns_empty_without_a_connected_integration(auth_client):
+    client, _org = auth_client
+    add = client.post("/api/repositories", json={"full_name": "acme/x"})
+    repo_id = add.json()["id"]
+
+    res = client.get(f"/api/repositories/{repo_id}/refs")
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_list_repository_refs_lists_branches_once_github_is_connected(auth_client, monkeypatch):
+    from app.providers import git_hosting
+
+    client, _org = auth_client
+    monkeypatch.setattr(git_hosting, "verify_github", lambda *, token, base_url: "octocat")
+    client.post("/api/integrations/github/connect", json={"account_label": "octocat", "credential": "ghp_real"})
+    add = client.post("/api/repositories", json={"full_name": "octocat/widgets", "provider": "github"})
+    repo_id = add.json()["id"]
+
+    seen = {}
+
+    def fake_list_branches(*, token, base_url, full_name):
+        seen["full_name"] = full_name
+        return [{"name": "main", "commit_sha": "aaa"}, {"name": "dev", "commit_sha": "bbb"}]
+
+    monkeypatch.setattr(git_hosting, "list_branches_github", fake_list_branches)
+    res = client.get(f"/api/repositories/{repo_id}/refs?ref_type=branches")
+    assert res.status_code == 200
+    assert res.json() == [{"name": "main", "commit_sha": "aaa"}, {"name": "dev", "commit_sha": "bbb"}]
+    assert seen["full_name"] == "octocat/widgets"
+
+
+def test_list_repository_refs_lists_tags_and_commits(auth_client, monkeypatch):
+    from app.providers import git_hosting
+
+    client, _org = auth_client
+    monkeypatch.setattr(git_hosting, "verify_github", lambda *, token, base_url: "octocat")
+    client.post("/api/integrations/github/connect", json={"account_label": "octocat", "credential": "ghp_real"})
+    add = client.post("/api/repositories", json={"full_name": "octocat/widgets", "provider": "github"})
+    repo_id = add.json()["id"]
+
+    monkeypatch.setattr(
+        git_hosting, "list_tags_github", lambda *, token, base_url, full_name: [{"name": "v1.0.0", "commit_sha": "ccc"}]
+    )
+    tags = client.get(f"/api/repositories/{repo_id}/refs?ref_type=tags")
+    assert tags.status_code == 200
+    assert tags.json() == [{"name": "v1.0.0", "commit_sha": "ccc"}]
+
+    monkeypatch.setattr(
+        git_hosting,
+        "list_commits_github",
+        lambda *, token, base_url, full_name: [{"sha": "ddd", "message": "Fix bug", "author_date": "2026-01-01T00:00:00Z"}],
+    )
+    commits = client.get(f"/api/repositories/{repo_id}/refs?ref_type=commits")
+    assert commits.status_code == 200
+    assert commits.json() == [{"sha": "ddd", "message": "Fix bug", "author_date": "2026-01-01T00:00:00Z"}]
+
+
+def test_list_repository_refs_rejects_an_invalid_ref_type(auth_client):
+    client, _org = auth_client
+    add = client.post("/api/repositories", json={"full_name": "acme/x"})
+    repo_id = add.json()["id"]
+
+    res = client.get(f"/api/repositories/{repo_id}/refs?ref_type=commit-history")
+    assert res.status_code == 400
+    assert res.json()["detail"] == "invalid_ref_type"
+
+
+def test_list_repository_refs_not_found_for_unknown_repo(auth_client):
+    client, _org = auth_client
+    res = client.get("/api/repositories/does-not-exist/refs")
+    assert res.status_code == 404
+
+
+def test_list_repository_refs_surfaces_revoked_credential_as_401(auth_client, monkeypatch):
+    from app.providers import git_hosting
+
+    client, _org = auth_client
+    monkeypatch.setattr(git_hosting, "verify_github", lambda *, token, base_url: "octocat")
+    client.post("/api/integrations/github/connect", json={"account_label": "octocat", "credential": "ghp_real"})
+    add = client.post("/api/repositories", json={"full_name": "octocat/widgets", "provider": "github"})
+    repo_id = add.json()["id"]
+
+    def fake_list(*, token, base_url, full_name):
+        raise git_hosting.CredentialError("invalid_credentials")
+
+    monkeypatch.setattr(git_hosting, "list_branches_github", fake_list)
+    res = client.get(f"/api/repositories/{repo_id}/refs")
+    assert res.status_code == 401
+    assert res.json()["detail"] == "invalid_credentials"

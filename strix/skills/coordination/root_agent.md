@@ -42,14 +42,6 @@ Structure agents by function:
 - Infrastructure vulnerabilities
 - Dependency and supply-chain (SCA) — see "Mandatory Agents" below; this is a standing role, not something to fold into another agent's task or skip because a triage pass judged it low-priority
 
-## Mandatory Agents
-
-Some coverage categories are exhaustive/enumerable rather than judgment-driven — a CVE either matches an installed package version or it doesn't, so skipping this category isn't a risk-based triage call, it's a coverage gap. Spawn these unconditionally, in addition to whatever the target-specific decomposition calls for:
-
-- **Dependency/SCA agent** — required whenever source code is available (whitebox/source-aware scans). Its job is to enumerate every dependency manifest/lockfile in the repository (every workspace in a monorepo — server, frontend, collector/worker, desktop, etc. each have their own) and check every one against known CVEs, then file a `create_dependency_report` for each match. A "triage" or "SAST" pass that *ranks* risk is not a substitute for this — ranking and ruling things out is exactly how real findings get silently dropped. This agent files reports directly; it does not hand off a list for someone else to decide whether to act on.
-
-Do not let an earlier triage/recon step talk you out of spawning these — their existence does not depend on what that step concluded.
-
 **Exploitation and Validation**
 - Proof-of-concept development
 - Impact demonstration
@@ -58,6 +50,20 @@ Do not let an earlier triage/recon step talk you out of spawning these — their
 **Reporting**
 - Finding documentation
 - Remediation recommendations
+
+## Mandatory Agents
+
+A run that spawns only a couple of narrowly-scoped agents (e.g. secrets + dependencies) and then finishes is not a thorough assessment, even if those two agents did their jobs well — it's a coverage gap wearing the shape of a finished scan. The categories below are exhaustive/enumerable enough that skipping one isn't a risk-based triage call someone made, it's something nobody looked at. Spawn a dedicated agent for **every** one of these that has any surface in the target, in addition to whatever the target-specific decomposition calls for, and do not let an earlier triage/recon pass talk you out of any of them — their existence does not depend on what that pass concluded:
+
+- **Dependencies (SCA)** — enumerate every dependency manifest/lockfile in the repository (every workspace in a monorepo — server, frontend, collector/worker, desktop, etc. each have their own) and check each against known CVEs, filing `create_dependency_report` directly. A triage/SAST pass that *ranks* risk is not a substitute — ranking and ruling out is exactly how findings get silently dropped.
+- **Secrets** — credential/key exposure, and explicitly including git *history*, not just the current working tree. A secret removed in a later commit is still fully recoverable and just as exploitable.
+- **Access control** — IDOR, RBAC/authorization checks, path traversal (including symlink-based bypasses of a path-containment check).
+- **Authentication** — auth flows, IdP/OAuth client config (redirect URIs, web origins), CORS, session/token lifecycle (issuance, expiry, revocation), rate limiting on auth endpoints.
+- **Injection** — SQLi, XSS, command injection, SSRF.
+- **Extension points** — plugin/MCP/agent-tool execution paths, backup/restore or other integrity-sensitive import paths (anywhere untrusted input becomes executable configuration or code).
+- **Infrastructure** — IaC (Kubernetes/Docker manifests), CI/CD pipeline configuration.
+
+These are the same categories `finish_scan`'s `coverage_checklist` parameter requires an entry for — it will reject the call if any is missing, empty, or answered with a one-word dismissal instead of a real note. Treat that gate as a check on work you should have already done, not a form to fill in retroactively: if you reach `finish_scan` and don't have a genuine answer for a category, that means go spawn the agent now, not write something plausible-sounding to get past the gate.
 
 ## Coordination Principles
 
@@ -97,4 +103,4 @@ When all agents report completion:
 1. Collect and deduplicate findings across agents
 2. Assess overall security posture
 3. Compile executive summary with prioritized recommendations
-4. Invoke finish tool with final report
+4. Invoke `finish_scan` with the final report and a `coverage_checklist` entry for every category listed in "Mandatory Agents" above

@@ -177,8 +177,10 @@ def prepare_run(args: argparse.Namespace) -> None:
         if target_info["type"] == "repository":
             repo_url = target_info["details"]["target_repo"]
             dest_name = target_info["details"].get("workspace_subdir")
-            cloned_path = clone_repository(repo_url, args.run_name, dest_name)
+            ref = target_info["details"].get("ref")
+            cloned_path, resolved_sha = clone_repository(repo_url, args.run_name, dest_name, ref=ref)
             target_info["details"]["cloned_repo_path"] = cloned_path
+            target_info["details"]["resolved_commit_sha"] = resolved_sha
 
     args.local_sources = collect_local_sources(args.targets_info)
     args.local_sources.extend(stage_api_specs(args.targets_info, args.run_name))

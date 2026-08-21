@@ -1,6 +1,6 @@
 from app.db import SessionLocal
 from app.providers import git_hosting
-from app.routers.integrations import list_live_repos
+from app.routers.integrations import list_live_refs, list_live_repos
 
 from .conftest import add_member
 
@@ -176,6 +176,36 @@ def test_list_live_repos_returns_none_for_a_non_live_provider(auth_client):
     db = SessionLocal()
     try:
         assert list_live_repos(db, org["id"], "bitbucket") is None
+    finally:
+        db.close()
+
+
+def test_list_live_refs_returns_empty_for_a_non_live_provider(auth_client):
+    from app import models
+
+    _client, org = auth_client
+    db = SessionLocal()
+    try:
+        repo = models.Repository(org_id=org["id"], full_name="acme/x", provider="bitbucket")
+        db.add(repo)
+        db.commit()
+        db.refresh(repo)
+        assert list_live_refs(db, org["id"], repo, "branches") == []
+    finally:
+        db.close()
+
+
+def test_list_live_refs_returns_empty_for_an_invalid_ref_type(auth_client):
+    from app import models
+
+    _client, org = auth_client
+    db = SessionLocal()
+    try:
+        repo = models.Repository(org_id=org["id"], full_name="acme/x", provider="github")
+        db.add(repo)
+        db.commit()
+        db.refresh(repo)
+        assert list_live_refs(db, org["id"], repo, "not-a-real-type") == []
     finally:
         db.close()
 

@@ -214,6 +214,15 @@ async def _build_scan_targets(db, pentest: models.Pentest) -> tuple[list[dict], 
     (whitebox skill loads) and a live URL (auth-flow/CORS/cookie/etc.
     findings that only exist on a deployed instance), matching what a
     combined source-review-plus-dynamic-testing engagement covers.
+
+    It may also carry `ref` (branch/tag/commit) — passed through to the
+    clone so the scan targets that exact ref instead of whatever the
+    remote's default branch's HEAD happens to be right now, and falling
+    back to the repository's own `default_branch` when unset. Either way,
+    the commit that was *actually* cloned is recorded on the pentest as
+    `resolved_commit_sha` — a bare ref name like a branch is a moving
+    target, so this is what makes "what did this scan test" reproducible
+    and comparable across runs.
     """
     if pentest.target_type == "repository":
         repo = db.get(models.Repository, pentest.target_id)
@@ -223,9 +232,14 @@ async def _build_scan_targets(db, pentest: models.Pentest) -> tuple[list[dict], 
         from strix.interface.utils import clone_repository  # lazy import: optional dependency
 
         clone_url = _repo_clone_url(db, pentest.org_id, repo)
+        requested_ref = pentest.ref or repo.default_branch
         # git clone shells out and blocks; run off the event loop so the
         # single-scan-at-a-time worker doesn't stall other request handling.
-        cloned_path = await asyncio.to_thread(clone_repository, clone_url, pentest.id)
+        cloned_path, resolved_sha = await asyncio.to_thread(
+            clone_repository, clone_url, pentest.id, None, requested_ref
+        )
+        pentest.resolved_commit_sha = resolved_sha
+        db.commit()
         targets = [
             {
                 "type": "repository",
